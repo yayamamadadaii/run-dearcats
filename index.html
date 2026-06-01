@@ -688,7 +688,7 @@ function scheduleBGM(gen) {
 
 // ── 入力 ────────────────────────────────
 document.addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); } });
-canvas.addEventListener('pointerdown', e => {
+document.addEventListener('pointerdown', e => {
   e.preventDefault();
   // モバイルでタップ時にフルスクリーン要求（初回タップ時のみ）
   if (!document.fullscreenElement) {
