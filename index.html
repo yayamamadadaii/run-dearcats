@@ -68,6 +68,16 @@
     #ui-panel .hint   { color: #00ffaa; }
     #ui-panel .gameover-score { color: #ffff00; }
 
+    /* フルスクリーン時にcanvasを画面いっぱいに */
+    :fullscreen #wrapper, :-webkit-full-screen #wrapper {
+      width: 100vw;
+      height: 100vh;
+      justify-content: center;
+    }
+    :fullscreen canvas, :-webkit-full-screen canvas {
+      border: none;
+    }
+
     /* 縦持ち警告オーバーレイ */
     #rotate-overlay {
       display: none;
@@ -706,7 +716,16 @@ function scheduleBGM(gen) {
 
 // ── 入力 ────────────────────────────────
 document.addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); } });
-canvas.addEventListener('pointerdown', e => { e.preventDefault(); jump(); });
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  // モバイルでタップ時にフルスクリーン要求（初回タップ時のみ）
+  if (!document.fullscreenElement) {
+    const el = document.documentElement;
+    if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+    else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+  }
+  jump();
+});
 
 // ── 描画 ────────────────────────────────
 function draw() {
