@@ -305,7 +305,7 @@ function placeCat() {
 // ── メインループ ──────────────────────────
 let lastT = 0;
 function loop(t) {
-  const dt = Math.min((t - lastT)/16.67, 3); lastT = t;
+  const dt = Math.min((t - lastT)/16.67, 2.5); lastT = t;
   update(dt); draw();
   requestAnimationFrame(loop);
 }
@@ -482,12 +482,15 @@ function update(dt) {
   cat.vy += 0.5 * dt;
   cat.y += cat.vy * dt;
 
-  // 接地判定
+  // 接地判定（トンネリング防止: 前フレームと現フレームの間を線形補間でチェック）
   const wasOnGround = cat.onGround;
   cat.onGround = false;
   for (const r of roofs) {
-    const cx = cat.x + 8, cy = cat.y + 18;
-    if (cx > r.x && cx < r.x + r.w && cy >= r.y && cy <= r.y + 8 && cat.vy >= 0) {
+    const cx = cat.x + 8;
+    const cy = cat.y + 18;
+    const prevCy = cy - cat.vy * dt; // 今フレームの移動前の足元Y
+    // X範囲内かつ、今フレームに屋根面を通過または着地したか
+    if (cx > r.x && cx < r.x + r.w && cat.vy >= 0 && prevCy <= r.y + 1 && cy >= r.y) {
       cat.y = r.y - 18; cat.vy = 0; cat.onGround = true; cat.jumps = 0;
       if (!wasOnGround) seLand();
       break;
