@@ -1,0 +1,1773 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>走れねこ様 - 屋根の上を駆け抜けろ！</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #0a0a1a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      font-family: monospace;
+    }
+    #wrapper {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    canvas {
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      border: 3px solid #444;
+      display: block;
+    }
+    #info {
+      color: #888;
+      margin-top: 6px;
+      letter-spacing: 1px;
+      white-space: nowrap;
+    }
+    /* UIオーバーレイ：テキストをcanvasの外でクリアに描画 */
+    #ui-overlay {
+      position: absolute;
+      top: 0; left: 0;
+      pointer-events: none;
+      font-family: 'Courier New', monospace;
+      font-weight: bold;
+    }
+    #ui-score {
+      position: absolute;
+      top: 6%; left: 3%;
+      line-height: 1.6;
+    }
+    #ui-score .label { color: #ffff00; }
+    #ui-score .best  { color: #aaaaaa; }
+    #ui-panel {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -60%);
+      background: rgba(0,0,20,0.88);
+      border: 2px solid #334455;
+      border-radius: 4px;
+      padding: 16px 24px;
+      text-align: center;
+      display: none;
+    }
+    #ui-panel h1 { font-size: 1.6em; margin-bottom: 8px; }
+    #ui-panel p  { font-size: 0.85em; margin: 4px 0; color: #ccc; }
+    #ui-panel .blink { animation: blink 1s step-end infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    #ui-panel .record { color: #ff88ff; }
+    #ui-panel .hint   { color: #00ffaa; }
+    #ui-panel .gameover-score { color: #ffff00; }
+
+    /* 縦持ち警告オーバーレイ */
+    #rotate-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #0a0a1a;
+      z-index: 9999;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+      font-family: 'Courier New', monospace;
+      text-align: center;
+      gap: 20px;
+    }
+    #rotate-overlay .rotate-icon {
+      font-size: 52px;
+      animation: rotate-hint 1.5s ease-in-out infinite;
+    }
+    #rotate-overlay p {
+      font-size: 16px;
+      color: #aaccff;
+      line-height: 1.8;
+    }
+    #rotate-overlay .title {
+      font-size: 22px;
+      color: #ffff66;
+      font-weight: bold;
+    }
+    @keyframes rotate-hint {
+      0%   { transform: rotate(0deg); }
+      40%  { transform: rotate(90deg); }
+      60%  { transform: rotate(90deg); }
+      100% { transform: rotate(90deg) scale(1.1); }
+    }
+    @media (orientation: portrait) and (max-width: 768px) {
+      #rotate-overlay { display: flex; }
+    }
+  </style>
+</head>
+<body>
+<!-- 縦持ち警告 -->
+<div id="rotate-overlay">
+  <div class="rotate-icon">📱</div>
+  <div class="title">走れねこ様</div>
+  <p>横向きにして<br>プレイしてください！</p>
+</div>
+
+<div id="wrapper">
+  <canvas id="c" width="400" height="240"></canvas>
+  <div id="ui-overlay">
+    <div id="ui-score">
+      <div class="label" id="ui-score-val">SCORE: 000000</div>
+      <div class="best"  id="ui-best-val" >BEST : 000000</div>
+    </div>
+    <div id="ui-panel">
+      <h1 id="ui-panel-title"></h1>
+      <p  id="ui-panel-sub"></p>
+      <p  id="ui-panel-sub2"></p>
+      <p  id="ui-panel-hint" class="blink hint"></p>
+    </div>
+  </div>
+  <div id="info">SPACE / TAP: ジャンプ &nbsp;|&nbsp; 2回でニャンブル！</div>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 400, H = 240;
+
+// ── レスポンシブスケーリング ──────────────
+const info = document.getElementById('info');
+const uiOverlay = document.getElementById('ui-overlay');
+const uiScoreVal = document.getElementById('ui-score-val');
+const uiBestVal  = document.getElementById('ui-best-val');
+const uiPanel    = document.getElementById('ui-panel');
+const uiPanelTitle = document.getElementById('ui-panel-title');
+const uiPanelSub   = document.getElementById('ui-panel-sub');
+const uiPanelSub2  = document.getElementById('ui-panel-sub2');
+const uiPanelHint  = document.getElementById('ui-panel-hint');
+
+let currentScale = 1;
+function resize() {
+  const infoH = 28;
+  const scaleX = window.innerWidth / W;
+  const scaleY = (window.innerHeight - infoH) / H;
+  currentScale = Math.min(scaleX, scaleY);
+  const pw = Math.floor(W * currentScale);
+  const ph = Math.floor(H * currentScale);
+  canvas.style.width  = pw + 'px';
+  canvas.style.height = ph + 'px';
+  uiOverlay.style.width  = pw + 'px';
+  uiOverlay.style.height = ph + 'px';
+  const fs = Math.max(10, Math.floor(13 * currentScale));
+  uiOverlay.style.fontSize = fs + 'px';
+  info.style.fontSize = Math.max(10, Math.floor(12 * currentScale)) + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── パレット ──────────────────────────────
+const PAL = {
+  sky1: '#0d0d2b', sky2: '#1a1a3e',
+  moon: '#ffffcc', star: '#ffffff',
+  roof1: '#6b3a2a', roof2: '#4a2a1a', roof3: '#8b5a3a',
+  wall1: '#555577', wall2: '#333355',
+  tile:  '#7a4a3a',
+  cat:   '#f0f0f0', catDark: '#cccccc', catEye: '#44aaff',
+  catNose:'#ff88aa', catStripe: '#aaaaaa', catScrunchie: '#ff66aa',
+  outline: '#111111',
+  scoreCol: '#ffff00', ui: '#ffffff',
+  cloud: '#222244',
+  window1: '#ffff88', window2: '#334455',
+  chimney: '#333333',
+};
+
+// ── 星 ──────────────────────────────────
+const STARS = Array.from({length:60}, () => ({
+  x: Math.random()*W, y: Math.random()*(H*0.55),
+  r: Math.random() < 0.15 ? 2 : 1,
+  t: Math.random()*Math.PI*2
+}));
+
+// ── 状態 ────────────────────────────────
+let state; // 'title' | 'play' | 'hit' | 'dead'
+function reset() {
+  state = 'title';
+  score = 0; bestScore = bestScore || 0;
+  cat = { x: 80, y: 0, vy: 0, onGround: false, jumps: 0, frame: 0, ft: 0, dead: false, deadTimer: 0, blinkT: 0 };
+  roofs = []; obstacles = []; billboards = []; fireworks = []; fwQueue = []; bats = [];
+  scrollX = 0; speed = 2.2; spawnTimer = 0; obstacleTimer = 0; batTimer = 0;
+  hitTimer = 0; angryObstacle = null; lastBillboardMilestone = 0;
+  fwFlags = { 1000: false, 1500: false, 2000: false };
+  roofs.push(mkRoof(0, H - 70, 200));
+  roofs.push(mkRoof(220, H - 90, 150));
+  roofs.push(mkRoof(390, H - 60, 180));
+  placeCat();
+  particles = [];
+  tick = 0;
+}
+
+let score = 0, bestScore = 0;
+let cat, roofs, obstacles, billboards, fireworks, fwQueue, bats, scrollX, speed, spawnTimer, obstacleTimer, batTimer, particles, tick;
+let hitTimer, angryObstacle, lastBillboardMilestone, fwFlags;
+
+// ── 看板データ ────────────────────────────
+const NEON_COLS  = ['#ff2244','#ffee00','#00ddff','#ff66ff','#ff8800','#44ffcc','#ffffff','#88ff44','#ff4488','#ff0000','#00ff88'];
+const NEON_BG    = ['#220011','#221100','#001122','#110022','#002211'];
+const SIGN_LABELS = ['焼肉','ラーメン','居酒屋','カラオケ','24H営業','BAR','餃子','寿司','やきとり','たこ焼','串カツ','OPEN','ホルモン'];
+
+// SIGN_ZONE: 右端に確保する看板専用エリア幅
+const SIGN_ZONE = 28;
+
+function mkSigns(x, y, w, h) {
+  const signs = [];
+  // 看板は右端（落とし穴側）のSIGN_ZONEに配置
+  // 建物が狭すぎる場合はスキップ
+  if (w < SIGN_ZONE + 10) return signs;
+
+  const col  = NEON_COLS[(Math.random()*NEON_COLS.length)|0];
+  const col2 = NEON_COLS[(Math.random()*NEON_COLS.length)|0];
+  const bg   = NEON_BG[(Math.random()*NEON_BG.length)|0];
+  const seed = Math.random()*Math.PI*2;
+  const label = SIGN_LABELS[(Math.random()*SIGN_LABELS.length)|0];
+
+  const isTate = Math.random() < 0.5;
+  if (isTate) {
+    // 縦長看板：右端に1本
+    const sw = Math.min(SIGN_ZONE - 4, 14 + (Math.random()*6)|0);
+    const sh = 32 + (Math.random()*24)|0;
+    const rx = w - sw - 2;         // 右端寄せ
+    const ry = 14 + (Math.random()*6)|0;
+    signs.push({ rx, ry, sw, sh, col, col2, bg, label, seed, kind: 'big-v' });
+  } else {
+    // 横長看板：右端エリアに横長
+    const sw = SIGN_ZONE - 4;
+    const sh = 16 + (Math.random()*10)|0;
+    const rx = w - sw - 2;
+    const ry = 14 + (Math.random()*10)|0;
+    signs.push({ rx, ry, sw, sh, col, col2, bg, label, seed, kind: 'big-h' });
+    // 小さな看板を追加
+    if (Math.random() < 0.5) {
+      const col3 = NEON_COLS[(Math.random()*NEON_COLS.length)|0];
+      const sw2 = SIGN_ZONE - 6;
+      const sh2 = 10 + (Math.random()*8)|0;
+      const rx2 = w - sw2 - 2;
+      const ry2 = ry + sh + 4 + (Math.random()*6)|0;
+      signs.push({ rx: rx2, ry: ry2, sw: sw2, sh: sh2, col: col3, col2, bg, label, seed: seed+1, kind: 'small' });
+    }
+  }
+  return signs;
+}
+
+// ── 屋根生成 ─────────────────────────────
+function mkRoof(x, y, w) {
+  const style = (Math.random()*3)|0;
+  const h = 55 + (Math.random()*40)|0;
+  const winCols = 2 + Math.floor(w / 22); // 窓を増量
+  const hasChimney = Math.random() < 0.4;
+  const winSeeds = Array.from({length: winCols}, () => Math.random() * Math.PI * 2);
+  const winTypes = Array.from({length: winCols}, () => (Math.random()*3)|0); // 窓種類
+  return { x, y, w, h, style, winCols, hasChimney,
+           chimneyX: 10 + (Math.random()*(w-20))|0, winSeeds, winTypes, signs: [] };
+}
+
+function placeCat() {
+  const r = roofs[0];
+  cat.y = r.y - 18;
+  cat.x = r.x + 40;
+  cat.vy = 0; cat.onGround = true; cat.jumps = 0;
+}
+
+// ── メインループ ──────────────────────────
+let lastT = 0;
+function loop(t) {
+  const dt = Math.min((t - lastT)/16.67, 3); lastT = t;
+  update(dt); draw();
+  requestAnimationFrame(loop);
+}
+
+function update(dt) {
+  tick += dt;
+  STARS.forEach(s => s.t += 0.02*dt);
+
+  // パーティクルは常に更新・削除（プレイ中はスクロール分を引く）
+  const scroll = state === 'play' ? speed : 0;
+  particles.forEach(p => { p.x += p.vx*dt - scroll*dt; p.y += p.vy*dt; p.vy += 0.15*dt; p.life -= dt; });
+  particles = particles.filter(p => p.life > 0);
+
+  if (state === 'dead') {
+    cat.deadTimer += dt;
+    // 左へ全力逃走
+    cat.x -= (6 + cat.deadTimer * 0.05) * dt;
+    if (cat.deadTimer > 30 && cat.x < -40) state = 'title';
+    return;
+  }
+
+  if (state === 'hit') {
+    hitTimer += dt;
+    // コウモリ衝突は短縮演出（即ビビり→逃走）
+    const hitLimit = angryObstacle ? 160 : 80;
+    if (hitTimer > hitLimit) {
+      if (score > bestScore) bestScore = score;
+      state = 'dead';
+      cat.dead = true;
+      cat.deadTimer = 0;
+      seGameOver();
+    }
+    return;
+  }
+
+  if (state !== 'play') return;
+
+  // スコア・速度
+  score += dt * 0.4;
+  speed = 2.2 + score * 0.002;
+
+  // 看板スクロール・削除
+  billboards.forEach(b => b.x -= speed * dt);
+  billboards = billboards.filter(b => b.x > -120);
+
+  // 花火キュー処理（時間差爆発）
+  if (fwQueue && fwQueue.length > 0) {
+    fwQueue.forEach(q => q.delay -= dt);
+    const ready = fwQueue.filter(q => q.delay <= 0);
+    fwQueue = fwQueue.filter(q => q.delay > 0);
+    ready.forEach(q => spawnBurst(q.size));
+  }
+
+  // 花火パーティクル更新
+  fireworks.forEach(p => {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 0.04 * dt; // ゆっくり落下
+    p.life -= dt;
+    p.alpha = Math.max(0, p.life / p.maxLife);
+  });
+  fireworks = fireworks.filter(p => p.life > 0);
+
+  // スコアマイルストーンで花火発射
+  if (score >= 1000 && !fwFlags[1000]) { fwFlags[1000] = true; launchFirework('small');  }
+  if (score >= 1500 && !fwFlags[1500]) { fwFlags[1500] = true; launchFirework('medium'); }
+  if (score >= 2000 && !fwFlags[2000]) { fwFlags[2000] = true; launchFirework('large');  }
+
+  // スコア100ごとに看板スポーン
+  const milestone = Math.floor(score / 300);
+  if (milestone > lastBillboardMilestone && score > 0) {
+    lastBillboardMilestone = milestone;
+    // 看板サイズ
+    const boardW = 100;
+    // 画面右外にある屋根で、看板が収まる幅のものを探す
+    const candidate = roofs.find(r => r.x > W && r.w >= boardW + 10);
+    if (candidate) {
+      // 屋根の左右端に収まるよう x を決める
+      const bx = candidate.x + 4 + (Math.random() * (candidate.w - boardW - 8))|0;
+      billboards.push({ x: bx, y: candidate.y });
+    }
+  }
+
+  // スクロール
+  roofs.forEach(r => r.x -= speed * dt);
+
+  // スポーン
+  spawnTimer -= dt;
+  if (spawnTimer <= 0) {
+    const last = roofs[roofs.length-1];
+    const gap = 30 + (Math.random()*60)|0;
+    const ny = Math.max(H*0.35, Math.min(H-80, last.y + ((Math.random()-0.5)*80)|0));
+    const nw = 120 + (Math.random()*100)|0;
+    roofs.push(mkRoof(last.x + last.w + gap, ny, nw));
+    spawnTimer = (nw + gap) / speed * 0.8;
+  }
+
+  // 古い屋根削除
+  roofs = roofs.filter(r => r.x + r.w > -10);
+
+  // 障害物スクロール
+  obstacles.forEach(o => o.x -= speed * dt);
+  obstacles = obstacles.filter(o => o.x > -30);
+
+  // 障害物スポーン（屋根の上にランダム配置）
+  obstacleTimer -= dt;
+  if (obstacleTimer <= 0 && score > 20) {
+    // 画面右端付近の屋根を探す
+    const candidates = roofs.filter(r => r.x > W * 0.7 && r.x < W * 1.5 && r.w > 60);
+    if (candidates.length > 0) {
+      const r = candidates[(Math.random() * candidates.length)|0];
+      // 障害物をその屋根の上に置く（猫の初期位置と被らないよう右寄り）
+      const ox = r.x + 30 + (Math.random() * (r.w - 50))|0;
+      obstacles.push({ x: ox, y: r.y - 12, breathT: Math.random()*Math.PI*2 });
+    }
+    obstacleTimer = 120 + (Math.random() * 80)|0;
+  }
+
+  // ── コウモリ ────────────────────────────
+  bats.forEach(b => {
+    b.x -= (speed + 1.5) * dt; // 少し速め
+    b.t += 0.07 * dt;
+    b.y = b.baseY + Math.sin(b.t) * 18; // 上下にうねる
+  });
+  bats = bats.filter(b => b.x > -30);
+
+  // スコア1500以上でスポーン
+  if (score > 1500) {
+    batTimer -= dt;
+    if (batTimer <= 0) {
+      // 猫が走る高さ付近（屋根の少し上）でランダムな高さ
+      const nearRoof = roofs.find(r => r.x > W * 0.6);
+      const baseY = nearRoof
+        ? nearRoof.y - 10 - (Math.random() * 40)|0   // 屋根の上0〜40px
+        : H * 0.45 - (Math.random() * 30)|0;
+      bats.push({ x: W + 20, baseY, y: baseY, t: Math.random() * Math.PI * 2 });
+      // スコアが高いほど出現頻度アップ
+      batTimer = Math.max(60, 200 - (score - 1500) * 0.05);
+    }
+  }
+
+  // コウモリとの当たり判定
+  const cx2 = cat.x + 8, cy2 = cat.y + 8;
+  for (const b of bats) {
+    if (cx2 > b.x + 2 && cx2 < b.x + 14 && cy2 > b.y + 2 && cy2 < b.y + 10) {
+      state = 'hit';
+      hitTimer = 0;
+      angryObstacle = null; // コウモリ衝突は怒り猫演出なし→そのまま逃走へ
+      cat.vy = 0;
+      stopBGM();
+      seHit();
+      setTimeout(() => seScared(), 600);
+      break;
+    }
+  }
+
+  // 障害物との当たり判定
+  const cx = cat.x + 4, cy = cat.y + 9;
+  for (const o of obstacles) {
+    if (cx > o.x + 2 && cx < o.x + 16 && cy > o.y + 2 && cy < o.y + 12) {
+      state = 'hit';
+      hitTimer = 0;
+      angryObstacle = o;
+      cat.vy = 0;
+      stopBGM();
+      seHit();
+      setTimeout(() => seAngry(), 700);
+      setTimeout(() => seScared(), 1400);
+      break;
+    }
+  }
+
+  // 猫物理
+  cat.vy += 0.5 * dt;
+  cat.y += cat.vy * dt;
+
+  // 接地判定
+  const wasOnGround = cat.onGround;
+  cat.onGround = false;
+  for (const r of roofs) {
+    const cx = cat.x + 8, cy = cat.y + 18;
+    if (cx > r.x && cx < r.x + r.w && cy >= r.y && cy <= r.y + 8 && cat.vy >= 0) {
+      cat.y = r.y - 18; cat.vy = 0; cat.onGround = true; cat.jumps = 0;
+      if (!wasOnGround) seLand();
+      break;
+    }
+  }
+
+  // アニメ
+  cat.ft += dt;
+  if (cat.onGround && cat.ft > 6) { cat.frame = (cat.frame + 1) % 4; cat.ft = 0; }
+  cat.blinkT += dt;
+
+  // 死亡判定
+  if (cat.y > H + 50) die();
+  if (cat.x < -20) die();
+
+  // 猫をX方向に少し前進（障害物をよける感じに）
+  // チャリ走風に左スクロールなので猫は固定X
+}
+
+function die() {
+  if (state === 'dead' || state === 'hit') return;
+  state = 'dead';
+  cat.dead = true;
+  if (score > bestScore) bestScore = score;
+  spawnParticles(cat.x + 8, cat.y + 8);
+  stopBGM();
+  seGameOver();
+}
+
+function spawnParticles(x, y) {
+  for (let i = 0; i < 16; i++) {
+    const a = (Math.PI*2 * i/16) + Math.random()*0.5;
+    particles.push({ x, y, vx: Math.cos(a)*3*(0.5+Math.random()), vy: Math.sin(a)*3*(0.5+Math.random())-2, life: 30+Math.random()*20, col: [PAL.cat, PAL.catDark, '#ffff00', '#ff8800'][i%4] });
+  }
+}
+
+function jump() {
+  if (state === 'title') { reset(); state = 'play'; startBGM(); return; }
+  if (state === 'dead') return;
+  if (cat.jumps < 2) {
+    cat.vy = cat.jumps === 0 ? -9 : -7;
+    if (cat.jumps === 0) seJump(); else seDoubleJump();
+    cat.jumps++;
+    cat.onGround = false;
+  }
+}
+
+function spawnDust(x, y) {
+  const a = Math.PI + Math.random()*Math.PI;
+  particles.push({ x, y, vx: Math.cos(a)*2, vy: Math.sin(a)*1-1, life: 12, col: '#aaaacc' });
+}
+
+// ── オーディオ ───────────────────────────
+let audioCtx = null;
+let bgmNodes = [];
+let bgmRunning = false;
+let bgmLoopTimer = null;
+let bgmGeneration = 0; // 世代カウンタで古いループを無効化
+
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+// 汎用ビープ音
+function beep(freq, dur, type='square', vol=0.18, startDelay=0) {
+  const ac = getAudioCtx();
+  const t = ac.currentTime + startDelay;
+  const osc = ac.createOscillator();
+  const gain = ac.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t);
+  gain.gain.setValueAtTime(vol, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  osc.connect(gain); gain.connect(ac.destination);
+  osc.start(t); osc.stop(t + dur + 0.05);
+}
+
+function seJump() {
+  beep(220, 0.06, 'square', 0.15);
+  beep(440, 0.08, 'square', 0.12, 0.04);
+}
+function seDoubleJump() {
+  beep(330, 0.05, 'square', 0.13);
+  beep(550, 0.05, 'square', 0.13, 0.05);
+  beep(770, 0.08, 'square', 0.11, 0.10);
+}
+function seLand() {
+  beep(120, 0.07, 'square', 0.10);
+}
+function seHit() {
+  // ガツンという衝突音
+  const ac = getAudioCtx();
+  const t = ac.currentTime;
+  const buf = ac.createBuffer(1, ac.sampleRate * 0.15, ac.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2-1) * (1 - i/d.length);
+  const src = ac.createBufferSource();
+  src.buffer = buf;
+  const gain = ac.createGain();
+  gain.gain.setValueAtTime(0.3, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+  src.connect(gain); gain.connect(ac.destination);
+  src.start(t);
+}
+function seAngry() {
+  // シャー！っという威嚇音（ノイズ+低音）
+  const ac = getAudioCtx();
+  const t = ac.currentTime;
+  // ノイズ成分
+  const buf = ac.createBuffer(1, ac.sampleRate * 0.4, ac.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2-1) * Math.exp(-i/d.length*3);
+  const src = ac.createBufferSource();
+  src.buffer = buf;
+  const g = ac.createGain(); g.gain.setValueAtTime(0.25, t);
+  src.connect(g); g.connect(ac.destination); src.start(t);
+  // グルル低音
+  const osc = ac.createOscillator();
+  const og = ac.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(80, t);
+  osc.frequency.linearRampToValueAtTime(55, t+0.4);
+  og.gain.setValueAtTime(0.2, t);
+  og.gain.exponentialRampToValueAtTime(0.001, t+0.4);
+  osc.connect(og); og.connect(ac.destination);
+  osc.start(t); osc.stop(t+0.45);
+}
+function seGameOver() {
+  // 逃げる音（下降メロディ）
+  [440,330,220,165].forEach((f,i) => beep(f, 0.12, 'square', 0.15, i*0.1));
+}
+function seScared() {
+  // ビビり音（高音トレモロ）
+  beep(880, 0.05, 'square', 0.08);
+  beep(660, 0.05, 'square', 0.08, 0.06);
+  beep(880, 0.05, 'square', 0.08, 0.12);
+}
+
+// BGM（8ビット風ループメロディ）
+const BGM_BPM = 148;
+const BGM_BEAT = 60 / BGM_BPM;
+// メロディ音符 [周波数, 拍数]
+const MELODY = [
+  [659,1],[659,1],[0,1],[659,1],[0,1],[523,1],[659,1],[0,1],
+  [784,2],[0,2],[392,2],[0,2],
+  [523,1],[0,2],[392,1],[0,2],[330,1],[0,1],
+  [440,1],[0,1],[494,1],[0,1],[466,1],[0,1],[440,2],
+  [392,1],[659,1],[784,1],[880,1],[0,1],[698,1],[784,1],[0,1],
+  [659,2],[523,1],[587,1],[494,2],[0,2],
+];
+const BASS = [
+  [131,2],[165,2],[196,2],[220,2],
+  [131,2],[165,2],[196,2],[220,2],
+  [131,2],[165,2],[196,2],[220,2],
+  [175,2],[196,2],[131,2],[165,2],
+  [131,2],[165,2],[196,2],[220,2],
+  [131,2],[165,2],[196,2],[220,2],
+];
+
+function startBGM() {
+  stopBGM(); // 必ず一度クリーンにしてから開始
+  bgmRunning = true;
+  bgmGeneration++;
+  scheduleBGM(bgmGeneration);
+}
+
+// 現在のピッチ倍率（スピードに応じてループごとに更新）
+function getBGMPitch() {
+  const baseSpeed = 2.2;
+  const maxSpeed  = 7.0;
+  const minPitch  = 1.0;
+  const maxPitch  = 1.6;
+  const t = Math.min((speed - baseSpeed) / (maxSpeed - baseSpeed), 1);
+  return minPitch + (maxPitch - minPitch) * t;
+}
+function stopBGM() {
+  bgmRunning = false;
+  bgmGeneration++; // 古い世代のループを無効化
+  if (bgmLoopTimer) { clearTimeout(bgmLoopTimer); bgmLoopTimer = null; }
+  bgmNodes.forEach(n => { try { n.stop(); } catch(e){} });
+  bgmNodes = [];
+}
+function scheduleBGM(gen) {
+  if (!bgmRunning || gen !== bgmGeneration) return;
+  const ac = getAudioCtx();
+  const masterGain = ac.createGain();
+  masterGain.gain.setValueAtTime(0.12, ac.currentTime);
+  masterGain.connect(ac.destination);
+
+  // ループ開始時点のピッチで固定（ループ中は変化しない、次ループで更新）
+  const pitch = getBGMPitch();
+  const beatDur = BGM_BEAT / pitch; // ピッチが上がるほどテンポも速く
+
+  let t = ac.currentTime + 0.05;
+  const melodyStart = t;
+  for (const [freq, beats] of MELODY) {
+    const dur = beats * beatDur;
+    if (freq > 0) {
+      const osc = ac.createOscillator();
+      const g = ac.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(freq * pitch, t);
+      g.gain.setValueAtTime(0.6, t);
+      g.gain.setValueAtTime(0.001, t + dur * 0.85);
+      osc.connect(g); g.connect(masterGain);
+      osc.start(t); osc.stop(t + dur);
+      bgmNodes.push(osc);
+    }
+    t += dur;
+  }
+  const loopDur = t - melodyStart;
+
+  let bt = melodyStart;
+  for (const [freq, beats] of BASS) {
+    const dur = beats * beatDur;
+    if (freq > 0) {
+      const osc = ac.createOscillator();
+      const g = ac.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq * pitch, bt);
+      g.gain.setValueAtTime(0.4, bt);
+      g.gain.setValueAtTime(0.001, bt + dur * 0.9);
+      osc.connect(g); g.connect(masterGain);
+      osc.start(bt); osc.stop(bt + dur);
+      bgmNodes.push(osc);
+    }
+    bt += dur;
+  }
+
+  // 世代チェック付きループ（次ループで最新ピッチを適用）
+  bgmLoopTimer = setTimeout(() => {
+    bgmNodes = [];
+    bgmLoopTimer = null;
+    scheduleBGM(gen);
+  }, loopDur * 1000 - 100);
+}
+
+// ── 入力 ────────────────────────────────
+document.addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); } });
+canvas.addEventListener('pointerdown', e => { e.preventDefault(); jump(); });
+
+// ── 描画 ────────────────────────────────
+function draw() {
+  // 空
+  const grad = ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0, PAL.sky1); grad.addColorStop(1, PAL.sky2);
+  ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
+
+  // 月
+  ctx.fillStyle = PAL.moon;
+  ctx.beginPath(); ctx.arc(340, 30, 18, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = PAL.sky1;
+  ctx.beginPath(); ctx.arc(348, 26, 15, 0, Math.PI*2); ctx.fill();
+
+  // 星
+  STARS.forEach(s => {
+    const bri = 0.5 + 0.5*Math.sin(s.t);
+    ctx.fillStyle = `rgba(255,255,255,${bri})`;
+    ctx.fillRect(s.x|0, s.y|0, s.r, s.r);
+  });
+
+  // 遠景シルエット
+  drawSkyline();
+
+  // 花火（シルエットの前景・建物より手前に表示）
+  drawFireworks();
+
+  // 屋根
+  roofs.forEach(drawRoof);
+
+  // 看板（スコア100ごと）
+  billboards.forEach(drawBillboard);
+
+  // コウモリ
+  bats.forEach(drawBat);
+
+  // 障害物（寝てる猫 or 怒り猫）
+  obstacles.forEach(o => {
+    if (state === 'hit' && o === angryObstacle) drawAngryCat(o);
+    else drawSleepingCat(o);
+  });
+
+  // パーティクル
+  particles.forEach(p => {
+    ctx.fillStyle = p.col;
+    ctx.fillRect(p.x|0, p.y|0, 3, 3);
+  });
+
+  // 猫（hit中はビビり、dead中は全力逃走）
+  if (state === 'hit') drawScaredCat();
+  else if (state === 'dead') drawRunningAwayCat();
+  else drawCat();
+
+  // UI
+  drawUI();
+}
+
+// 花火カラーセット
+const FW_COLORS = [
+  ['#ff4466','#ff88aa','#ffccdd'],
+  ['#ffcc00','#ffee88','#ffffcc'],
+  ['#44ddff','#88eeff','#ccffff'],
+  ['#ff88ff','#ffaaff','#ffddff'],
+  ['#88ff88','#aaffaa','#ddffdd'],
+  ['#ff8844','#ffbb88','#ffddcc'],
+];
+
+function launchFirework(size) {
+  const counts  = { small: 5, medium: 10, large: 15 };
+  const nums    = { small: 16, medium: 24, large: 36 };
+  const radii   = { small: 18, medium: 30, large: 48 };
+  const lives   = { small: 40, medium: 55, large: 75 };
+
+  const bursts = counts[size];
+  // 時間差で順番に打ち上げるためのキュー
+  if (!fwQueue) fwQueue = [];
+  for (let b = 0; b < bursts; b++) {
+    fwQueue.push({ size, delay: b * 18 }); // 18フレームずつずらす
+  }
+
+  // 花火 SE（最初の1発だけ）
+  seFirework(size);
+}
+
+function spawnBurst(size) {
+  const nums  = { small: 16, medium: 24, large: 36 };
+  const radii = { small: 18, medium: 30, large: 48 };
+  const lives = { small: 40, medium: 55, large: 75 };
+
+  const cx = 40 + Math.random() * (W - 80);
+  const cy = 18 + Math.random() * (H * 0.38);
+  const cols = FW_COLORS[(Math.random() * FW_COLORS.length)|0];
+  const n = nums[size];
+  const r = radii[size];
+  const life = lives[size];
+  const pSize = size === 'large' ? 2 : 1;
+
+  for (let i = 0; i < n; i++) {
+    const angle = (Math.PI * 2 * i / n) + (Math.random() - 0.5) * 0.3;
+    const spd = (0.7 + Math.random() * 0.6) * (r / life);
+    const col = cols[(Math.random() * cols.length)|0];
+    fireworks.push({ x: cx, y: cy, vx: Math.cos(angle)*spd, vy: Math.sin(angle)*spd, life, maxLife: life, alpha: 1, col, size: pSize });
+  }
+  // 中心フラッシュ
+  if (size !== 'small') {
+    for (let i = 0; i < 6; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      fireworks.push({ x: cx, y: cy, vx: Math.cos(angle)*0.5, vy: Math.sin(angle)*0.5, life: life*0.4, maxLife: life*0.4, alpha: 1, col: '#ffffff', size: 2 });
+    }
+  }
+  // 1発ごとに小さい爆発音
+  seFireworkBurst();
+}
+
+function seFireworkBurst() {
+  const ac = getAudioCtx();
+  const t  = ac.currentTime;
+  const buf = ac.createBuffer(1, ac.sampleRate * 0.18, ac.sampleRate);
+  const d   = buf.getChannelData(0);
+  for (let j = 0; j < d.length; j++) d[j] = (Math.random()*2-1) * Math.exp(-j/d.length*5);
+  const src = ac.createBufferSource();
+  src.buffer = buf;
+  const g = ac.createGain();
+  g.gain.setValueAtTime(0.12, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t+0.18);
+  src.connect(g); g.connect(ac.destination);
+  src.start(t);
+}
+
+function seFirework(size) {
+  const ac = getAudioCtx();
+  const t  = ac.currentTime;
+  // 打ち上げ音（ヒュー）
+  const osc = ac.createOscillator();
+  const g   = ac.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(200, t);
+  osc.frequency.exponentialRampToValueAtTime(size === 'large' ? 900 : 600, t + 0.3);
+  g.gain.setValueAtTime(0.15, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+  osc.connect(g); g.connect(ac.destination);
+  osc.start(t); osc.stop(t + 0.4);
+  // 爆発音（ノイズバースト）
+  const burstCount = size === 'large' ? 3 : size === 'medium' ? 2 : 1;
+  for (let i = 0; i < burstCount; i++) {
+    const delay = 0.3 + i * 0.18;
+    const buf = ac.createBuffer(1, ac.sampleRate * 0.25, ac.sampleRate);
+    const d   = buf.getChannelData(0);
+    for (let j = 0; j < d.length; j++) d[j] = (Math.random() * 2 - 1) * Math.exp(-j / d.length * 6);
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const bg = ac.createGain();
+    bg.gain.setValueAtTime(size === 'large' ? 0.22 : 0.15, t + delay);
+    bg.gain.exponentialRampToValueAtTime(0.001, t + delay + 0.25);
+    src.connect(bg); bg.connect(ac.destination);
+    src.start(t + delay);
+  }
+}
+
+function drawFireworks() {
+  fireworks.forEach(p => {
+    const a = p.alpha;
+    if (a <= 0) return;
+    // 尾を引く（透明な残像）
+    ctx.fillStyle = p.col + Math.floor(a * 180).toString(16).padStart(2,'0');
+    ctx.fillRect((p.x - p.vx * 3)|0, (p.y - p.vy * 3)|0, p.size, p.size);
+    // 本体
+    ctx.fillStyle = p.col + Math.floor(a * 255).toString(16).padStart(2,'0');
+    ctx.fillRect(p.x|0, p.y|0, p.size, p.size);
+  });
+}
+
+function drawBillboard(b) {
+  const bx = b.x|0;
+  const by = b.y|0;
+
+  const boardW = 100;
+  const boardH = 40;
+  const poleH  = 16;
+  const poleW  = 3;
+
+  // 支柱（2本）
+  ctx.fillStyle = '#778899';
+  ctx.fillRect(bx + 12,            by - poleH, poleW, poleH);
+  ctx.fillRect(bx + boardW - 15,   by - poleH, poleW, poleH);
+
+  const bTop = by - poleH - boardH;
+
+  // ── 看板本体 ──────────────────────────────
+
+  // 外枠（ネイビー濃いめ）
+  ctx.fillStyle = '#0a1a3a';
+  ctx.fillRect(bx, bTop, boardW, boardH);
+
+  // 外側ボーダー（白）
+  ctx.fillStyle = '#ddeeff';
+  ctx.fillRect(bx,              bTop,              boardW, 2);
+  ctx.fillRect(bx,              bTop+boardH-2,     boardW, 2);
+  ctx.fillRect(bx,              bTop,              2, boardH);
+  ctx.fillRect(bx+boardW-2,     bTop,              2, boardH);
+
+  // 内側ボーダー（金色）
+  ctx.fillStyle = '#ccaa44';
+  ctx.fillRect(bx+3,            bTop+3,            boardW-6, 1);
+  ctx.fillRect(bx+3,            bTop+boardH-4,     boardW-6, 1);
+  ctx.fillRect(bx+3,            bTop+3,            1, boardH-6);
+  ctx.fillRect(bx+boardW-4,     bTop+3,            1, boardH-6);
+
+  // ── コーナー装飾（ダイヤ型スパークル） ──
+  const sparkle = (sx, sy, c) => {
+    ctx.fillStyle = c;
+    ctx.fillRect(sx,   sy-2, 1, 5);
+    ctx.fillRect(sx-2, sy,   5, 1);
+    ctx.fillRect(sx-1, sy-1, 3, 3);
+  };
+  sparkle(bx+6,        bTop+7,        '#ffdd66');
+  sparkle(bx+boardW-7, bTop+7,        '#ffdd66');
+  sparkle(bx+6,        bTop+boardH-8, '#ffdd66');
+  sparkle(bx+boardW-7, bTop+boardH-8, '#ffdd66');
+
+  // ── 肉球アイコン（上中央） ──
+  const px = bx + (boardW>>1) - 4;
+  const py = bTop + 5;
+  ctx.fillStyle = '#ffaacc';
+  // 大きな肉球
+  ctx.fillRect(px+1, py+3, 5, 4);
+  // 小さな肉球3つ
+  ctx.fillRect(px,   py+1, 3, 2);
+  ctx.fillRect(px+3, py,   3, 2);
+  ctx.fillRect(px+6, py+1, 3, 2);
+
+  // ── 左右の花飾り ──
+  // 左花
+  ctx.fillStyle = '#6699dd';
+  ctx.fillRect(bx+14, bTop+14, 3, 3);
+  ctx.fillRect(bx+12, bTop+16, 7, 1);
+  ctx.fillRect(bx+15, bTop+12, 1, 7);
+  ctx.fillStyle = '#ffdd88';
+  ctx.fillRect(bx+15, bTop+15, 1, 1); // 中心
+  // 葉
+  ctx.fillStyle = '#44aa66';
+  ctx.fillRect(bx+11, bTop+19, 3, 2);
+  ctx.fillRect(bx+16, bTop+19, 3, 2);
+
+  // 右花
+  ctx.fillStyle = '#6699dd';
+  ctx.fillRect(bx+boardW-17, bTop+14, 3, 3);
+  ctx.fillRect(bx+boardW-19, bTop+16, 7, 1);
+  ctx.fillRect(bx+boardW-16, bTop+12, 1, 7);
+  ctx.fillStyle = '#ffdd88';
+  ctx.fillRect(bx+boardW-16, bTop+15, 1, 1);
+  ctx.fillStyle = '#44aa66';
+  ctx.fillRect(bx+boardW-20, bTop+19, 3, 2);
+  ctx.fillRect(bx+boardW-15, bTop+19, 3, 2);
+
+  // ── テキスト ──
+  ctx.imageSmoothingEnabled = false;
+  // 上段「保護猫カフェ」小さめ白
+  ctx.fillStyle = '#eeeeff';
+  ctx.font = 'bold 6px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('保護猫カフェ', bx + (boardW>>1), bTop + 19);
+  // 下段「拝啓ねこ様」大きめ金色
+  ctx.fillStyle = '#ffdd44';
+  ctx.font = 'bold 8px monospace';
+  ctx.fillText('拝啓ねこ様', bx + (boardW>>1), bTop + 32);
+  ctx.textAlign = 'left';
+
+  // ── グロー（パルス） ──
+  const pulse = 0.5 + 0.5 * Math.sin(tick * 0.07);
+  if (pulse > 0.72) {
+    ctx.fillStyle = `rgba(180,220,255,${(pulse - 0.72) * 0.25})`;
+    ctx.fillRect(bx-2, bTop-2, boardW+4, boardH+4);
+  }
+}
+
+function drawSkyline() {
+  // ── 最遠景（超高層ビル群・最も暗い） ─ 高さは控えめ ──
+  ctx.fillStyle = '#0a0a1e';
+  const farBuildings = [
+    [0,  102,18],[20, 88, 22],[44, 98, 16],[62, 82, 26],
+    [90, 92, 20],[114,78, 18],[134,94, 14],[150,84, 30],
+    [220,86, 18],[244,96, 16],[262,80, 20],[284,90, 24],
+    [360,88, 16],[378,96, 22],
+  ];
+  farBuildings.forEach(([x,y,w]) => ctx.fillRect(x, y, w, H - y));
+  // 窓ライン（かすかに）
+  ctx.fillStyle = '#0e0e28';
+  farBuildings.forEach(([x,y,w]) => {
+    for (let wy = y+6; wy < H-2; wy += 8) ctx.fillRect(x+1, wy, w-2, 1);
+  });
+
+  // ── 東京タワー風（中央やや左・細い鉄塔） ──────────
+  ctx.fillStyle = '#111124';
+  // 脚部（台形）
+  ctx.beginPath();
+  ctx.moveTo(188, H); ctx.lineTo(194, 108);
+  ctx.lineTo(206, 108); ctx.lineTo(212, H); ctx.fill();
+  // 胴体（台形・細く）
+  ctx.beginPath();
+  ctx.moveTo(194,108); ctx.lineTo(197, 72);
+  ctx.lineTo(203, 72); ctx.lineTo(206,108); ctx.fill();
+  // 上部細い柱
+  ctx.fillRect(199, 48, 2, 24);
+  // アンテナ
+  ctx.fillRect(200, 36, 1, 13);
+  // 中間プラットフォーム（2段）
+  ctx.fillRect(194, 90, 12, 3);
+  ctx.fillStyle = '#0d0d20';
+  ctx.fillRect(196, 78, 8,  2);
+  // 鉄骨横筋
+  ctx.fillStyle = '#0d0d1e';
+  for (let ty = 112; ty < H; ty += 7) ctx.fillRect(189, ty, 22, 1);
+
+  // ── 段差ビル（右寄り・階段状シルエット） ───────
+  ctx.fillStyle = '#0c0c1e';
+  // 3段の階段状ビル
+  ctx.fillRect(320, 114, 50, H-114); // 下段（幅広）
+  ctx.fillRect(326,  96, 36, 18);    // 中段
+  ctx.fillRect(332,  80, 22, 16);    // 上段（細い）
+  ctx.fillRect(338,  68, 10, 12);    // 最上部
+  // アンテナ
+  ctx.fillStyle = '#0a0a18';
+  ctx.fillRect(342,  56,  2, 12);
+  // 窓ライン（各段）
+  ctx.fillStyle = '#111128';
+  for (let wy = 84; wy < H-2; wy += 8) ctx.fillRect(322, wy, 46, 1);
+  for (let wx = 324; wx < 368; wx += 6) ctx.fillRect(wx, 116, 3, H-116);
+
+  // ── 中景ビル群 ────────────────────────────────
+  ctx.fillStyle = '#0f0f26';
+  const midBuildings = [
+    [0,  115,38],[40, 105,28],[70, 118,22],[94, 100,34],
+    [130,110,26],[158,102,18],[178,112,30],[240,105,20],
+    [262,118,24],[292,98, 32],[316,108,22],[346,112,16],[364,100,36],
+  ];
+  midBuildings.forEach(([x,y,w]) => ctx.fillRect(x, y, w, H-y));
+
+  // 屋上装飾（水タンク・アンテナ・小屋）
+  midBuildings.forEach(([x,y,w], i) => {
+    ctx.fillStyle = '#0c0c22';
+    if (i % 3 === 0) {
+      // 水タンク（円筒風）
+      ctx.fillRect(x+w-10, y-7, 7, 7);
+      ctx.fillRect(x+w-11, y-8, 9, 2);
+    } else if (i % 3 === 1) {
+      // アンテナ
+      ctx.fillRect(x+(w>>1),   y-12, 1, 12);
+      ctx.fillRect(x+(w>>1)-4, y-12,  9,  1);
+      ctx.fillRect(x+(w>>1)-2, y-9,   5,  1);
+    } else {
+      // 屋上小屋
+      ctx.fillRect(x+4, y-5, 10, 5);
+      ctx.fillRect(x+3, y-6, 12, 2);
+    }
+  });
+
+  // 中景ビル窓（ぼんやり点灯）
+  ctx.fillStyle = '#14142e';
+  midBuildings.forEach(([x,y,w]) => {
+    for (let wx = x+3; wx < x+w-2; wx += 5) {
+      for (let wy = y+4; wy < H-4; wy += 7) {
+        ctx.fillRect(wx, wy, 3, 4);
+      }
+    }
+  });
+}
+
+function drawRoof(r) {
+  const { x, y, w, h, style, winCols, hasChimney, chimneyX, winSeeds, winTypes, signs } = r;
+  const col1 = [PAL.roof1, PAL.wall1, '#3a2a4a'][style % 3];
+  const col2 = [PAL.roof2, PAL.wall2, '#2a1a3a'][style % 3];
+  const col3 = [PAL.roof3, '#667788', '#5a3a6a'][style % 3];
+
+  // 壁（常にキャンバス最下部まで伸ばす）
+  ctx.fillStyle = col2;
+  ctx.fillRect(x|0, (y+10)|0, w|0, H - y - 10);
+
+  // 屋根
+  ctx.fillStyle = col1;
+  ctx.fillRect(x|0, y|0, w|0, 12);
+  ctx.fillStyle = col3;
+  ctx.fillRect(x|0, y|0, w|0, 3);
+  ctx.fillRect(x|0, (y+10)|0, w|0, 2);
+  ctx.fillStyle = PAL.tile;
+  for (let tx = x; tx < x+w; tx += 8) ctx.fillRect(tx|0, y|0, 4, 2);
+
+  // ── 窓：グリッド配置（壁全体に敷き詰め） ──────────
+  const floorH = 14;                          // 1フロアの高さ
+  const wallH = H - (y + 10);                // 実際の壁高さ（キャンバス下端まで）
+  const floors = Math.max(1, Math.floor((wallH - 2) / floorH));
+  const winW = 7, winH = 8, winGapX = 11;   // 窓サイズと間隔
+  const winAreaW = w;
+  const winsPerRow = Math.max(1, Math.floor((winAreaW - 6) / winGapX));
+
+  // フロア区切りライン
+  for (let fl = 1; fl < floors; fl++) {
+    const fy = (y + 12 + fl * floorH)|0;
+    ctx.fillStyle = col1 + '88';
+    ctx.fillRect(x|0, fy, w|0, 1);
+  }
+
+  // 窓グリッド（全フロア）
+  for (let fl = 0; fl < floors; fl++) {
+    for (let wi = 0; wi < winsPerRow; wi++) {
+      const wx = (x + 4 + wi * winGapX)|0;
+      const wy = (y + 14 + fl * floorH + 2)|0;
+      if (wx + winW > x + winAreaW - 2) break;
+      if (wy + winH > H - 2) break; // キャンバス下端を超えない
+
+      const seed = winSeeds[(fl * winsPerRow + wi) % winSeeds.length];
+      const lit = Math.sin(tick * 0.018 + seed) > -0.2;
+      const lightCol = ['#ffff88','#ffdd88','#aaddff','#ffd0d0'][wi % 4];
+
+      ctx.fillStyle = '#1a2233';
+      ctx.fillRect(wx, wy, winW, winH);
+      ctx.fillStyle = lit ? lightCol : '#0d1520';
+      ctx.fillRect(wx+1, wy+1, winW-2, winH-2);
+      // 窓枠の十字
+      ctx.fillStyle = '#1a2233';
+      ctx.fillRect(wx + (winW>>1), wy, 1, winH);
+      ctx.fillRect(wx, wy + (winH>>1), winW, 1);
+    }
+  }
+
+  // ── ネオン看板（大きく・目立つ） ─────────────
+  for (const sg of signs) {
+    const { rx, ry, sw, sh, col, col2: c2, bg, label, seed, kind } = sg;
+    const sx = (x + rx)|0;
+    const sy = (y + ry)|0;
+    if (sx + sw < x || sx > x + w) continue;
+
+    const pulse  = 0.65 + 0.35 * Math.sin(tick * 0.06 + seed);
+    const flash  = Math.sin(tick * 0.12 + seed * 2) > 0.6;
+
+    if (kind === 'big-v') {
+      // 大縦看板：太枠＋縦に色帯
+      ctx.fillStyle = bg;
+      ctx.fillRect(sx, sy, sw, sh);
+      // 太枠（3px）
+      ctx.fillStyle = col;
+      ctx.fillRect(sx, sy, sw, 3);
+      ctx.fillRect(sx, sy+sh-3, sw, 3);
+      ctx.fillRect(sx, sy, 3, sh);
+      ctx.fillRect(sx+sw-3, sy, 3, sh);
+      // 内側に色ストライプ
+      const strH = ((sh - 8) / 3)|0;
+      ctx.fillStyle = col;
+      ctx.fillRect(sx+3, sy+4, sw-6, strH);
+      ctx.fillStyle = c2;
+      ctx.fillRect(sx+3, sy+4+strH+1, sw-6, strH);
+      ctx.fillStyle = flash ? '#ffffff' : col;
+      ctx.fillRect(sx+3, sy+4+strH*2+2, sw-6, strH);
+      // グロー
+      if (pulse > 0.85) {
+        ctx.fillStyle = col + '55';
+        ctx.fillRect(sx-1, sy-1, sw+2, sh+2);
+      }
+    } else if (kind === 'big-h') {
+      // 大横看板：太枠＋ベタ背景＋ドット文字風ブロック
+      ctx.fillStyle = bg;
+      ctx.fillRect(sx, sy, sw, sh);
+      // 太枠（3px）
+      ctx.fillStyle = col;
+      ctx.fillRect(sx, sy, sw, 3);
+      ctx.fillRect(sx, sy+sh-3, sw, 3);
+      ctx.fillRect(sx, sy, 3, sh);
+      ctx.fillRect(sx+sw-3, sy, 3, sh);
+      // 中身：横ストライプ＋文字ブロック
+      ctx.fillStyle = col + 'aa';
+      ctx.fillRect(sx+3, sy+3, sw-6, sh-6);
+      ctx.fillStyle = flash ? '#ffffff' : c2;
+      // 中央に太い文字ブロック（ドット風）
+      const bw = Math.min(sw-10, 28), bh = sh-8;
+      ctx.fillRect((sx + (sw-bw)/2)|0, sy+4, bw, bh);
+      ctx.fillStyle = bg;
+      ctx.fillRect((sx + (sw-bw)/2 + 2)|0, sy+6, bw-4, bh-4);
+      ctx.fillStyle = col;
+      ctx.fillRect((sx + (sw-bw)/2 + 4)|0, sy+8, bw-8, bh-8);
+      // グロー
+      if (pulse > 0.85) {
+        ctx.fillStyle = col + '44';
+        ctx.fillRect(sx-1, sy-1, sw+2, sh+2);
+      }
+    } else {
+      // 小看板：シンプル枠＋中心ブロック
+      ctx.fillStyle = bg;
+      ctx.fillRect(sx, sy, sw, sh);
+      ctx.fillStyle = col;
+      ctx.fillRect(sx, sy, sw, 2);
+      ctx.fillRect(sx, sy+sh-2, sw, 2);
+      ctx.fillRect(sx, sy, 2, sh);
+      ctx.fillRect(sx+sw-2, sy, 2, sh);
+      ctx.fillStyle = flash ? col : c2;
+      ctx.fillRect(sx+3, sy+3, sw-6, sh-6);
+    }
+  }
+
+  // 煙突
+  if (hasChimney) {
+    ctx.fillStyle = PAL.chimney;
+    ctx.fillRect((x+chimneyX)|0, (y-14)|0, 8, 16);
+    ctx.fillRect((x+chimneyX-2)|0, (y-16)|0, 12, 4);
+    for (let s=0;s<3;s++) {
+      const st = (tick*0.03 + s*2) % 1;
+      const sy2 = y - 18 - st*20;
+      ctx.fillStyle = `rgba(100,100,120,${(1-st)*0.5})`;
+      ctx.beginPath(); ctx.arc((x+chimneyX+4)|0, sy2|0, 3+st*4, 0, Math.PI*2); ctx.fill();
+    }
+  }
+}
+
+function drawCat() {
+  const cx = cat.x|0, cy = cat.y|0;
+  const f = cat.frame;
+  const air = !cat.onGround;
+  const blink = (cat.blinkT % 120) < 8;
+
+  // 影（地上のみ）
+  if (cat.onGround) {
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillRect(cx+2, cy+17, 14, 2);
+  }
+
+  // しっぽ（しましま）
+  const tailFrames = [[0,8],[1,7],[2,8],[1,9]];
+  const [,ty] = air ? [3,12] : tailFrames[f];
+  // しっぽ根元（太め）
+  ctx.fillStyle = PAL.catStripe;
+  ctx.fillRect(cx-1, cy+ty,   6, 4);
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx,   cy+ty+1, 2, 2);
+  ctx.fillRect(cx+3, cy+ty,   2, 4);
+  // しっぽ先端（細め）
+  ctx.fillStyle = PAL.catStripe;
+  ctx.fillRect(cx-6, cy+ty-3, 5, 4);
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx-5, cy+ty-2, 2, 2);
+  // 先っぽ丸み
+  ctx.fillStyle = PAL.catStripe;
+  ctx.fillRect(cx-8, cy+ty-2, 3, 3);
+
+  // 体（白）
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx+1, cy+6, 14, 11);
+
+  // 首のシュシュ（ピンク）
+  ctx.fillStyle = PAL.catScrunchie;
+  ctx.fillRect(cx+4, cy+5, 8, 3);
+  ctx.fillStyle = '#ff99cc';
+  ctx.fillRect(cx+7, cy+4, 2, 2); // リボン結び目
+
+  // 脚アニメ（白）
+  ctx.fillStyle = PAL.cat;
+  if (air) {
+    ctx.fillRect(cx+2, cy+16, 4, 3);
+    ctx.fillRect(cx+10, cy+16, 4, 3);
+  } else {
+    const legOff = [0,1,2,1][f];
+    ctx.fillRect(cx+2, cy+16+legOff, 4, 3-legOff);
+    ctx.fillRect(cx+10, cy+16+(legOff>0?0:1), 4, 3-(legOff>0?0:1));
+    ctx.fillRect(cx+4, cy+17, 4, 2);
+  }
+
+  // 頭（白）
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx+4, cy, 12, 9);
+
+  // 耳
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx+4, cy-3, 4, 4);
+  ctx.fillRect(cx+12, cy-3, 4, 4);
+  ctx.fillStyle = PAL.catNose; // 耳の内側ピンク
+  ctx.fillRect(cx+5, cy-2, 2, 2);
+  ctx.fillRect(cx+13, cy-2, 2, 2);
+
+  // 目
+  if (!blink) {
+    ctx.fillStyle = PAL.catEye;
+    ctx.fillRect(cx+7, cy+3, 2, 3);
+    ctx.fillRect(cx+12, cy+3, 2, 3);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(cx+8, cy+4, 1, 2);
+    ctx.fillRect(cx+13, cy+4, 1, 2);
+    // ハイライト
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(cx+7, cy+3, 1, 1);
+    ctx.fillRect(cx+12, cy+3, 1, 1);
+  } else {
+    ctx.fillStyle = PAL.catDark;
+    ctx.fillRect(cx+7, cy+5, 2, 1);
+    ctx.fillRect(cx+12, cy+5, 2, 1);
+  }
+
+  // 鼻・ひげ
+  ctx.fillStyle = PAL.catNose;
+  ctx.fillRect(cx+10, cy+6, 2, 2);
+  ctx.fillStyle = PAL.catDark;
+  ctx.fillRect(cx+6, cy+7, 4, 1);
+  ctx.fillRect(cx+12, cy+7, 4, 1);
+  ctx.fillRect(cx+5, cy+6, 3, 1);
+  ctx.fillRect(cx+13, cy+6, 3, 1);
+
+  // ダブルジャンプエフェクト
+  if (cat.jumps === 2 && !cat.onGround) {
+    ctx.fillStyle = 'rgba(255,150,200,0.5)';
+    ctx.fillRect(cx+2, cy+14, 14, 2);
+    ctx.fillStyle = 'rgba(255,150,200,0.25)';
+    ctx.fillRect(cx, cy+16, 18, 2);
+  }
+}
+
+// コウモリ
+function drawBat(b) {
+  const bx = b.x|0;
+  const by = b.y|0;
+  // 羽ばたきアニメ（t で2フレーム切り替え）
+  const flap = Math.sin(b.t * 6) > 0; // 速い羽ばたき
+
+  // 体
+  ctx.fillStyle = '#332244';
+  ctx.fillRect(bx + 5, by + 3, 6, 6);
+  // 頭（少し上）
+  ctx.fillStyle = '#443355';
+  ctx.fillRect(bx + 6, by + 1, 4, 4);
+  // 耳
+  ctx.fillStyle = '#332244';
+  ctx.fillRect(bx + 5, by - 1, 2, 3);
+  ctx.fillRect(bx + 9, by - 1, 2, 3);
+  ctx.fillStyle = '#ff88aa';
+  ctx.fillRect(bx + 6, by,     1, 1);
+  ctx.fillRect(bx + 10, by,    1, 1);
+  // 目（赤く光る）
+  ctx.fillStyle = '#ff2200';
+  ctx.fillRect(bx + 6, by + 2, 1, 1);
+  ctx.fillRect(bx + 9, by + 2, 1, 1);
+
+  if (flap) {
+    // 羽ばたき上げ
+    ctx.fillStyle = '#443366';
+    // 左翼
+    ctx.fillRect(bx,     by,     5, 2);
+    ctx.fillRect(bx - 2, by + 1, 4, 2);
+    ctx.fillRect(bx,     by + 2, 5, 1);
+    // 右翼
+    ctx.fillRect(bx + 11, by,     5, 2);
+    ctx.fillRect(bx + 14, by + 1, 4, 2);
+    ctx.fillRect(bx + 11, by + 2, 5, 1);
+    // 翼の骨（膜の筋）
+    ctx.fillStyle = '#221133';
+    ctx.fillRect(bx + 1, by,     1, 3);
+    ctx.fillRect(bx + 3, by,     1, 2);
+    ctx.fillRect(bx + 12, by,    1, 3);
+    ctx.fillRect(bx + 14, by,    1, 2);
+  } else {
+    // 羽ばたき下げ
+    ctx.fillStyle = '#443366';
+    // 左翼
+    ctx.fillRect(bx,     by + 4, 5, 2);
+    ctx.fillRect(bx - 2, by + 5, 4, 2);
+    ctx.fillRect(bx,     by + 3, 5, 2);
+    // 右翼
+    ctx.fillRect(bx + 11, by + 4, 5, 2);
+    ctx.fillRect(bx + 14, by + 5, 4, 2);
+    ctx.fillRect(bx + 11, by + 3, 5, 2);
+    ctx.fillStyle = '#221133';
+    ctx.fillRect(bx + 1, by + 4, 1, 3);
+    ctx.fillRect(bx + 3, by + 4, 1, 2);
+    ctx.fillRect(bx + 12, by + 4, 1, 3);
+    ctx.fillRect(bx + 14, by + 4, 1, 2);
+  }
+
+  // 牙
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(bx + 7, by + 5, 1, 2);
+  ctx.fillRect(bx + 9, by + 5, 1, 2);
+}
+
+// 寝ている猫（障害物）
+function drawSleepingCat(o) {
+  const ox = o.x|0;
+  // 呼吸アニメ（ゆっくり上下）
+  o.breathT += 0.04;
+  const by = Math.sin(o.breathT) * 0.5 |0;
+  const oy = (o.y + by)|0;
+
+  // 影
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.fillRect(ox+1, oy+11, 17, 2);
+
+  // 丸まった体（灰色猫）
+  ctx.fillStyle = '#888899';
+  ctx.fillRect(ox+2, oy+4, 14, 7);
+  ctx.fillRect(ox+4, oy+2, 10, 9);
+  // お腹（薄い色）
+  ctx.fillStyle = '#aaaabc';
+  ctx.fillRect(ox+5, oy+5, 7, 5);
+
+  // しっぽ（体の前に巻いてる）
+  ctx.fillStyle = '#777788';
+  ctx.fillRect(ox, oy+7, 4, 3);
+  ctx.fillRect(ox+1, oy+5, 3, 3);
+  // しっぽの縞
+  ctx.fillStyle = '#555566';
+  ctx.fillRect(ox, oy+8, 2, 1);
+  ctx.fillRect(ox+1, oy+6, 1, 1);
+
+  // 頭
+  ctx.fillStyle = '#888899';
+  ctx.fillRect(ox+10, oy, 8, 7);
+  // 耳
+  ctx.fillStyle = '#888899';
+  ctx.fillRect(ox+10, oy-2, 3, 3);
+  ctx.fillRect(ox+15, oy-2, 3, 3);
+  ctx.fillStyle = '#cc8899';
+  ctx.fillRect(ox+11, oy-1, 1, 1);
+  ctx.fillRect(ox+16, oy-1, 1, 1);
+
+  // 閉じた目（zzz寝てる）
+  ctx.fillStyle = '#555566';
+  ctx.fillRect(ox+12, oy+3, 3, 1);
+  ctx.fillRect(ox+16, oy+3, 2, 1);
+
+  // 鼻
+  ctx.fillStyle = '#cc8899';
+  ctx.fillRect(ox+14, oy+4, 2, 1);
+
+  // ZZZ
+  const zt = (tick * 0.015)|0 % 3;
+  ctx.fillStyle = '#aaaaff';
+  if (zt >= 0) pixelText('z', ox+18, oy-4, '#aaaaff', 1);
+  if (zt >= 1) pixelText('z', ox+21, oy-9, '#8888ee', 1);
+  if (zt >= 2) pixelText('Z', ox+24, oy-15, '#6666cc', 1);
+}
+
+// 全力逃走猫（左向きダッシュ）
+function drawRunningAwayCat() {
+  const cx = cat.x|0, cy = cat.y|0;
+  const f = ((tick * 0.4)|0) % 4; // 速い脚アニメ
+
+  // しっぽ（後ろに流れる）
+  ctx.fillStyle = PAL.catStripe;
+  ctx.fillRect(cx+14, cy+6, 6, 4);
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx+15, cy+7, 2, 2);
+  ctx.fillRect(cx+14, cy+6, 4, 2);
+  ctx.fillStyle = PAL.catStripe;
+  ctx.fillRect(cx+19, cy+4, 4, 4);
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx+20, cy+5, 2, 2);
+
+  // 体
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx+1, cy+5, 14, 11);
+  // シュシュ
+  ctx.fillStyle = PAL.catScrunchie;
+  ctx.fillRect(cx+3, cy+5, 8, 3);
+  ctx.fillStyle = '#ff99cc';
+  ctx.fillRect(cx+6, cy+4, 2, 2);
+
+  // 脚（全力ダッシュ）
+  ctx.fillStyle = PAL.cat;
+  const legPairs = [[0,3],[2,1],[3,0],[1,2]];
+  const [fl, bl] = legPairs[f];
+  ctx.fillRect(cx+2,  cy+15+fl, 4, 4-fl);
+  ctx.fillRect(cx+9,  cy+15+bl, 4, 4-bl);
+
+  // 頭（左向き）
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx-4, cy, 10, 9);
+  // 耳
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx-4, cy-3, 4, 4);
+  ctx.fillRect(cx+3, cy-3, 4, 4);
+  ctx.fillStyle = PAL.catNose;
+  ctx.fillRect(cx-3, cy-2, 2, 2);
+  ctx.fillRect(cx+4, cy-2, 2, 2);
+
+  // 怯え目（うしろ向きに振り返り）
+  ctx.fillStyle = '#224488';
+  ctx.fillRect(cx-1, cy+3, 1, 3);
+  ctx.fillRect(cx+1, cy+3, 1, 3);
+  ctx.fillRect(cx-1, cy+3, 3, 1);
+  // 鼻
+  ctx.fillStyle = PAL.catNose;
+  ctx.fillRect(cx-2, cy+6, 2, 2);
+
+  // 汗・動線
+  ctx.fillStyle = '#88ccff';
+  ctx.fillRect(cx+10, cy+2, 1, 3);
+  ctx.fillRect(cx+13, cy+4, 1, 2);
+  // スピード線
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.fillRect(cx+16, cy+3, 8, 1);
+  ctx.fillRect(cx+18, cy+7, 6, 1);
+  ctx.fillRect(cx+15, cy+11, 9, 1);
+}
+
+// 怒り猫（弓なり背中・全身毛逆立ち威嚇）
+function drawAngryCat(o) {
+  const ox = o.x|0;
+  const oy = o.y|0;
+  const phase = hitTimer;
+  const B = '#555566'; // 体色（濃いグレー）
+  const S = '#333344'; // 毛の先（さらに濃い）
+  const W = '#ffffff';
+
+  // 影
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.fillRect(ox-2, oy+14, 30, 3);
+
+  if (phase < 40) {
+    // フェーズ1: 驚いて跳び起きる
+    const rise = phase / 40;
+    ctx.fillStyle = B;
+    ctx.fillRect(ox+2, (oy + 5 - rise*6)|0, 16, 8);
+    ctx.fillRect(ox+6, (oy + 2 - rise*6)|0, 10, 6);
+    pixelText('!', ox+20, oy-8, '#ffff00', 1);
+    return;
+  }
+
+  // フェーズ2: 弓なり威嚇ポーズ
+  const shake = phase > 40 ? (((tick*0.9)|0) % 2 === 0 ? 0 : 1) : 0;
+  const bx = ox + shake;
+
+  // ── しっぽ（高く逆立ち、ボサボサ） ──
+  // しっぽ根元（右上へ）
+  ctx.fillStyle = B;
+  ctx.fillRect(bx+18, oy+4,  4, 3);
+  ctx.fillRect(bx+20, oy+1,  3, 4);
+  ctx.fillRect(bx+21, oy-2,  3, 4);
+  ctx.fillRect(bx+21, oy-5,  2, 4);
+  // しっぽの毛が逆立つ（ギザギザ左右に広がる）
+  ctx.fillStyle = S;
+  ctx.fillRect(bx+18, oy+2,  2, 2);
+  ctx.fillRect(bx+23, oy+1,  2, 3);
+  ctx.fillRect(bx+19, oy-1,  2, 2);
+  ctx.fillRect(bx+23, oy-2,  2, 3);
+  ctx.fillRect(bx+20, oy-4,  2, 2);
+  ctx.fillRect(bx+23, oy-5,  2, 2);
+  ctx.fillRect(bx+19, oy-6,  2, 2);
+  ctx.fillRect(bx+22, oy-7,  2, 2);
+  ctx.fillRect(bx+20, oy-8,  1, 2);
+
+  // ── 弓なりの体（背中が盛り上がる） ──
+  ctx.fillStyle = B;
+  // 後ろ足側（低め）
+  ctx.fillRect(bx+15, oy+7,  8, 7);
+  // 胴体中央（高く盛り上がる）
+  ctx.fillRect(bx+7,  oy+2,  12, 10);
+  ctx.fillRect(bx+9,  oy,    8,  10);
+  // 前側（低め）
+  ctx.fillRect(bx+1,  oy+6,  8,  8);
+
+  // ── 背中の逆立つ毛（スパイク） ──
+  ctx.fillStyle = S;
+  // 背中ライン（アーチ状にスパイク）
+  const spikes = [
+    [bx+7,  oy-2,  2, 4],
+    [bx+9,  oy-4,  2, 5],
+    [bx+11, oy-5,  2, 6],
+    [bx+13, oy-4,  2, 5],
+    [bx+15, oy-2,  2, 4],
+    [bx+17, oy,    2, 3],
+  ];
+  spikes.forEach(([x,y,w,h]) => ctx.fillRect(x,y,w,h));
+
+  // ── 後ろ足 ──
+  ctx.fillStyle = B;
+  ctx.fillRect(bx+15, oy+13, 4, 3);
+  ctx.fillRect(bx+20, oy+13, 4, 3);
+  // 爪
+  ctx.fillStyle = W;
+  ctx.fillRect(bx+15, oy+15, 1, 2);
+  ctx.fillRect(bx+17, oy+15, 1, 2);
+  ctx.fillRect(bx+20, oy+15, 1, 2);
+  ctx.fillRect(bx+22, oy+15, 1, 2);
+
+  // ── 前足（踏ん張り） ──
+  ctx.fillStyle = B;
+  ctx.fillRect(bx+1,  oy+13, 4, 3);
+  ctx.fillRect(bx+6,  oy+13, 4, 3);
+  // 爪
+  ctx.fillStyle = W;
+  ctx.fillRect(bx+1,  oy+15, 1, 2);
+  ctx.fillRect(bx+3,  oy+15, 1, 2);
+  ctx.fillRect(bx+6,  oy+15, 1, 2);
+  ctx.fillRect(bx+8,  oy+15, 1, 2);
+
+  // ── 頭（低く前に突き出す） ──
+  ctx.fillStyle = B;
+  ctx.fillRect(bx-4, oy+4,  10, 8);
+  ctx.fillRect(bx-2, oy+2,  8,  8);
+  // 耳（逆立ち）
+  ctx.fillStyle = S;
+  ctx.fillRect(bx-4, oy-1,  3, 5);
+  ctx.fillRect(bx+3, oy-1,  3, 5);
+  ctx.fillStyle = B;
+  ctx.fillRect(bx-3, oy,    1, 3);
+  ctx.fillRect(bx+4, oy,    1, 3);
+
+  // 怒り目（つり上がり赤目）
+  ctx.fillStyle = '#ff2200';
+  ctx.fillRect(bx-2, oy+5, 3, 2);
+  ctx.fillRect(bx+3, oy+5, 3, 2);
+  ctx.fillStyle = S;
+  // 眉（∨型つり上がり）
+  ctx.fillRect(bx-3, oy+4, 2, 1);
+  ctx.fillRect(bx-1, oy+3, 2, 1);
+  ctx.fillRect(bx+3, oy+3, 2, 1);
+  ctx.fillRect(bx+5, oy+4, 2, 1);
+
+  // 口（大きく開けて牙）
+  ctx.fillStyle = '#aa0000';
+  ctx.fillRect(bx-3, oy+8, 9, 4);
+  ctx.fillStyle = '#ff4444';
+  ctx.fillRect(bx-2, oy+9, 7, 3);
+  // 牙（上下）
+  ctx.fillStyle = W;
+  ctx.fillRect(bx-2, oy+8, 2, 3);
+  ctx.fillRect(bx+1, oy+8, 2, 3);
+  ctx.fillRect(bx+4, oy+8, 2, 3);
+  ctx.fillRect(bx-1, oy+10, 1, 2);
+  ctx.fillRect(bx+2, oy+10, 1, 2);
+
+  // !! と怒りオーラ
+  pixelText('!!', bx+25, oy-10, '#ff4400', 1);
+  if (((tick*0.4)|0) % 2 === 0) {
+    ctx.fillStyle = 'rgba(255,60,0,0.18)';
+    ctx.fillRect(bx-6, oy-10, 38, 32);
+  }
+}
+
+// ビビり猫（白猫が怯える）
+function drawScaredCat() {
+  const phase = hitTimer;
+  // フェーズ3(110-160)以降は後退
+  const retreatX = phase > 110 ? (phase - 110) * 0.4 : 0;
+  const shake = phase > 40 ? (((tick*1.2)|0) % 2 === 0 ? -1 : 1) : 0;
+  const cx = (cat.x - retreatX + shake)|0;
+  const cy = cat.y|0;
+
+  // 影
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.fillRect(cx+2, cy+17, 14, 2);
+
+  // しっぽ（下がってる）
+  ctx.fillStyle = PAL.catStripe;
+  ctx.fillRect(cx-1, cy+14, 5, 4);
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx, cy+15, 2, 2);
+  ctx.fillRect(cx+3, cy+14, 2, 4);
+
+  // 体
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx+1, cy+6, 14, 11);
+  // シュシュ
+  ctx.fillStyle = PAL.catScrunchie;
+  ctx.fillRect(cx+4, cy+5, 8, 3);
+  ctx.fillStyle = '#ff99cc';
+  ctx.fillRect(cx+7, cy+4, 2, 2);
+
+  // 脚（すくんでいる）
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx+3, cy+16, 3, 3);
+  ctx.fillRect(cx+10, cy+16, 3, 3);
+
+  // 頭
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx+4, cy, 12, 9);
+  // 耳（寝ている）
+  ctx.fillStyle = PAL.cat;
+  ctx.fillRect(cx+4, cy+1, 4, 3);
+  ctx.fillRect(cx+12, cy+1, 4, 3);
+  ctx.fillStyle = PAL.catNose;
+  ctx.fillRect(cx+5, cy+2, 2, 1);
+  ctx.fillRect(cx+13, cy+2, 2, 1);
+
+  // 怯え目（><）
+  ctx.fillStyle = '#224488';
+  ctx.fillRect(cx+7, cy+3, 1, 3);
+  ctx.fillRect(cx+9, cy+3, 1, 3);
+  ctx.fillRect(cx+7, cy+3, 3, 1);
+  ctx.fillRect(cx+12, cy+3, 1, 3);
+  ctx.fillRect(cx+14, cy+3, 1, 3);
+  ctx.fillRect(cx+12, cy+3, 3, 1);
+
+  // 汗
+  if (phase > 40) {
+    ctx.fillStyle = '#88ccff';
+    ctx.fillRect(cx+15, cy+1, 2, 3);
+    ctx.fillRect(cx+16, cy+4, 1, 2);
+    if (phase > 80) {
+      ctx.fillRect(cx+2, cy+2, 2, 3);
+      ctx.fillRect(cx+1, cy+5, 1, 2);
+    }
+  }
+
+  // ビビり吹き出し
+  if (phase > 40 && phase < 110) {
+    pixelText('ひぃ！', cx+16, cy-10, '#ffffff', 1);
+  }
+}
+
+function drawUI() {
+  // スコア・ベスト（HTML）
+  uiScoreVal.textContent = `SCORE: ${(score|0).toString().padStart(6,'0')}`;
+  uiBestVal.textContent  = `BEST : ${(bestScore|0).toString().padStart(6,'0')}`;
+
+  // パネル（タイトル / ゲームオーバー）
+  if (state === 'title') {
+    uiPanel.style.display = 'block';
+    uiPanelTitle.style.color = '#ffff00';
+    uiPanelTitle.textContent = '走れねこ様';
+    uiPanelSub.textContent  = '屋根の上を駆け抜けろ！';
+    uiPanelSub2.textContent = '';
+    uiPanelHint.textContent = '[ SPACE / TAP ] でスタート';
+    uiPanelHint.className   = 'blink hint';
+  } else if (state === 'dead' && cat.deadTimer > 30) {
+    uiPanel.style.display = 'block';
+    uiPanelTitle.style.color = '#ff4444';
+    uiPanelTitle.textContent = 'GAME OVER';
+    uiPanelSub.className  = 'gameover-score';
+    uiPanelSub.textContent = `SCORE: ${(score|0)}`;
+    uiPanelSub2.textContent = (score >= bestScore && score > 0) ? '★ NEW RECORD! ★' : '';
+    uiPanelSub2.style.color = '#ff88ff';
+    uiPanelHint.textContent = '[ SPACE / TAP ] でリトライ';
+    uiPanelHint.className   = 'blink';
+    uiPanelHint.style.color = '#aaaaaa';
+  } else {
+    uiPanel.style.display = 'none';
+  }
+}
+
+function drawPanel(x, y, w, h) {
+  ctx.fillStyle = 'rgba(0,0,20,0.85)';
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = '#334455';
+  ctx.fillRect(x, y, w, 2);
+  ctx.fillRect(x, y+h-2, w, 2);
+  ctx.fillRect(x, y, 2, h);
+  ctx.fillRect(x+w-2, y, 2, h);
+  ctx.fillStyle = '#556677';
+  ctx.fillRect(x+2, y+2, 2, 2);
+  ctx.fillRect(x+w-4, y+2, 2, 2);
+  ctx.fillRect(x+2, y+h-4, 2, 2);
+  ctx.fillRect(x+w-4, y+h-4, 2, 2);
+}
+
+// ドット風テキスト（canvas標準フォントをピクセルっぽく）
+function pixelText(text, x, y, col, size) {
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = col;
+  ctx.font = `${size === 2 ? 16 : 8}px monospace`;
+  ctx.fillText(text, x, y + (size===2?14:8));
+}
+
+
+// ── 起動 ────────────────────────────────
+reset();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
