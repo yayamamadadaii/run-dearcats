@@ -139,7 +139,6 @@
         <p id="ui-rank3"></p>
       </div>
       <p  id="ui-panel-hint" class="blink hint"></p>
-      <p  id="ui-bgm-toggle" style="font-size:0.75em; color:#aaffcc; margin-top:6px; pointer-events:auto; cursor:pointer; display:none;" onclick="toggleBGMMode()"></p>
       <p  id="ui-panel-hint2" style="font-size:0.75em; color:#888; margin-top:4px; pointer-events:auto; cursor:pointer;" onclick="doTitle()"></p>
     </div>
   </div>
@@ -611,12 +610,6 @@ function toggleFullscreen() {
   }
 }
 
-function toggleBGMMode() {
-  bgmMode = bgmMode === 'normal' ? 'jazz' : 'normal';
-  document.getElementById('ui-bgm-toggle').textContent =
-    bgmMode === 'jazz' ? '♪ BGM: JAZZ' : '♪ BGM: NORMAL';
-}
-
 function doRetry() {
   reset(); state = 'countdown'; countdownVal = 3; countdownTimer = 0;
 }
@@ -736,9 +729,6 @@ function seScared() {
   beep(880, 0.05, 'square', 0.08, 0.12);
 }
 
-// BGMモード: 'normal' | 'jazz'
-let bgmMode = 'normal';
-
 // BGM（8ビット風ループメロディ）
 const BGM_BPM = 148;
 const BGM_BEAT = 60 / BGM_BPM;
@@ -760,49 +750,11 @@ const BASS = [
   [131,2],[165,2],[196,2],[220,2],
 ];
 
-// ── ジャズBGM ────────────────────────────
-// スウィング: 長拍=1.5, 短拍=0.5 の繰り返し（2拍で1スウィング）
-// コード進行: Dm7 - G7 - Cmaj7 - Am7 (ii-V-I-vi) × 2
-const JAZZ_BPM = 120;
-const JAZZ_BEAT = 60 / JAZZ_BPM;
-
-// メロディ [Hz, 拍数] スウィング8分音符
-const JAZZ_MELODY = [
-  // Dm7感: D E F A
-  [587,1.5],[659,0.5],[698,1.5],[587,0.5],[523,1.5],[587,0.5],[440,2],
-  // G7感: G B D F
-  [392,1.5],[440,0.5],[494,1.5],[392,0.5],[349,1.5],[440,0.5],[392,2],
-  // Cmaj7感: C E G B
-  [523,1.5],[587,0.5],[659,1.5],[784,0.5],[698,1.5],[659,0.5],[523,2],
-  // Am7感: A C E G
-  [440,1.5],[494,0.5],[523,1.5],[440,0.5],[392,1.5],[330,0.5],[440,2],
-  // くり返し2
-  [659,1.5],[698,0.5],[784,1.5],[880,0.5],[784,1.5],[698,0.5],[659,2],
-  [587,1.5],[523,0.5],[494,1.5],[440,0.5],[392,1.5],[440,0.5],[494,2],
-  [523,1.5],[587,0.5],[659,1.5],[523,0.5],[494,1.5],[440,0.5],[392,2],
-  [440,1.5],[392,0.5],[330,1.5],[294,0.5],[330,1.5],[392,0.5],[440,2],
-];
-// ウォーキングベース [Hz, 拍数] 4ビート
-const JAZZ_BASS = [
-  [147,2],[175,2],[196,2],[220,2], // Dm7
-  [98,2],[110,2],[131,2],[147,2],  // G7
-  [131,2],[147,2],[165,2],[175,2], // Cmaj7
-  [110,2],[131,2],[147,2],[131,2], // Am7
-  [147,2],[175,2],[196,2],[220,2],
-  [98,2],[110,2],[131,2],[147,2],
-  [131,2],[147,2],[165,2],[175,2],
-  [110,2],[131,2],[147,2],[110,2],
-];
-// ハイハット（刻み）パターン: 1=on 0=off × 32（8分音符）
-const JAZZ_HH = [1,0,1,0,1,0,1,0, 1,0,1,0,1,0,1,0, 1,0,1,0,1,0,1,0, 1,0,1,0,1,0,1,0,
-                 1,0,1,0,1,0,1,0, 1,0,1,0,1,0,1,0, 1,0,1,0,1,0,1,0, 1,0,1,0,1,0,1,0];
-
 function startBGM() {
   stopBGM();
   bgmRunning = true;
   bgmGeneration++;
-  if (bgmMode === 'jazz') scheduleJazzBGM(bgmGeneration);
-  else scheduleBGM(bgmGeneration);
+  scheduleBGM(bgmGeneration);
 }
 
 // 現在のピッチ倍率（スピードに応じてループごとに更新）
@@ -873,79 +825,6 @@ function scheduleBGM(gen) {
     bgmNodes = [];
     bgmLoopTimer = null;
     scheduleBGM(gen);
-  }, loopDur * 1000 - 100);
-}
-
-function scheduleJazzBGM(gen) {
-  if (!bgmRunning || gen !== bgmGeneration) return;
-  const ac = getAudioCtx();
-  const masterGain = ac.createGain();
-  masterGain.gain.setValueAtTime(0.12, ac.currentTime);
-  masterGain.connect(ac.destination);
-
-  const pitch = getBGMPitch();
-  const bd = JAZZ_BEAT / pitch;
-
-  // メロディ（square）
-  let t = ac.currentTime + 0.05;
-  const loopStart = t;
-  for (const [freq, beats] of JAZZ_MELODY) {
-    const dur = beats * bd;
-    if (freq > 0) {
-      const osc = ac.createOscillator();
-      const g = ac.createGain();
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(freq * pitch, t);
-      g.gain.setValueAtTime(0.12, t);
-      g.gain.setValueAtTime(0.001, t + dur * 0.85);
-      osc.connect(g); g.connect(masterGain);
-      osc.start(t); osc.stop(t + dur);
-      bgmNodes.push(osc);
-    }
-    t += dur;
-  }
-  const loopDur = t - loopStart;
-
-  // ウォーキングベース（triangle）
-  let bt = loopStart;
-  for (const [freq, beats] of JAZZ_BASS) {
-    const dur = beats * bd;
-    const osc = ac.createOscillator();
-    const g = ac.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(freq * pitch, bt);
-    g.gain.setValueAtTime(0.35, bt);
-    g.gain.setValueAtTime(0.001, bt + dur * 0.85);
-    osc.connect(g); g.connect(masterGain);
-    osc.start(bt); osc.stop(bt + dur);
-    bgmNodes.push(osc);
-    bt += dur;
-  }
-
-  // ハイハット（sine短音）スウィング感
-  let ht = loopStart;
-  const swingUnit = bd * 0.5;
-  for (let i = 0; i < JAZZ_HH.length; i++) {
-    if (JAZZ_HH[i]) {
-      const osc = ac.createOscillator();
-      const g = ac.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(8000, ht);
-      const vol = (i % 4 === 0) ? 0.06 : 0.03;
-      g.gain.setValueAtTime(vol, ht);
-      g.gain.setValueAtTime(0.001, ht + 0.04);
-      osc.connect(g); g.connect(masterGain);
-      osc.start(ht); osc.stop(ht + 0.05);
-      bgmNodes.push(osc);
-    }
-    // スウィング: 偶数は長め、奇数は短め
-    ht += (i % 2 === 0) ? swingUnit * 1.4 : swingUnit * 0.6;
-  }
-
-  bgmLoopTimer = setTimeout(() => {
-    bgmNodes = [];
-    bgmLoopTimer = null;
-    scheduleJazzBGM(gen);
   }, loopDur * 1000 - 100);
 }
 
@@ -2016,12 +1895,8 @@ function drawUI() {
     uiPanelSub.textContent  = '屋根の上を駆け抜けろ！';
     uiPanelSub2.textContent = '';
     document.getElementById('ui-ranking').style.display = 'none';
-    document.getElementById('ui-bgm-toggle').style.display = 'none';
     uiPanelHint.textContent = '[ SPACE / TAP ] でスタート';
     uiPanelHint.className   = 'blink hint';
-    const bgmToggleEl = document.getElementById('ui-bgm-toggle');
-    bgmToggleEl.style.display = 'block';
-    bgmToggleEl.textContent = bgmMode === 'jazz' ? '♪ BGM: JAZZ' : '♪ BGM: NORMAL';
     document.getElementById('ui-panel-hint2').textContent = '';
   } else if (state === 'dead' && cat.deadTimer > 30) {
     uiPanel.style.display = 'block';
@@ -2040,7 +1915,6 @@ function drawUI() {
       el.style.color = ['#ffff88','#cccccc','#aaaaaa'][i-1];
       el.textContent = s !== undefined ? `#${i}  ${s.toString().padStart(6,'0')}m` : `#${i}  ------`;
     });
-    document.getElementById('ui-bgm-toggle').style.display = 'none';
     uiPanelHint.textContent = '[ SPACE / TAP ] でリスタート';
     uiPanelHint.className   = 'blink hint';
     document.getElementById('ui-panel-hint2').textContent = '▶ タイトルへ戻る';
