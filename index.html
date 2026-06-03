@@ -131,15 +131,12 @@
       <p  id="ui-panel-sub2"></p>
       <div id="ui-ranking" style="display:none; margin: 6px 0;">
         <p style="color:#aaa; font-size:0.75em; margin-bottom:4px;">── BEST SCORES ──</p>
-        <p id="ui-rank1" style="color:#ffd700"></p>
-        <p id="ui-rank2" style="color:#c0c0c0"></p>
-        <p id="ui-rank3" style="color:#cd7f32"></p>
-      </div>
-      <div id="ui-buttons" style="display:none; margin-top:10px; display:none;">
-        <button id="btn-retry" onclick="doRetry()">🔄 リトライ</button>
-        <button id="btn-title" onclick="doTitle()">🏠 タイトルへ</button>
+        <p id="ui-rank1"></p>
+        <p id="ui-rank2"></p>
+        <p id="ui-rank3"></p>
       </div>
       <p  id="ui-panel-hint" class="blink hint"></p>
+      <p  id="ui-panel-hint2" style="font-size:0.75em; color:#888; margin-top:4px;"></p>
     </div>
   </div>
   <div id="info">SPACE / TAP: ジャンプ &nbsp;|&nbsp; 2回でニャンブル！</div>
@@ -552,7 +549,7 @@ function spawnParticles(x, y) {
 
 function jump() {
   if (state === 'title') { reset(); state = 'play'; startBGM(); return; }
-  if (state === 'dead') return;
+  if (state === 'dead') { if (cat.deadTimer > 30) { doRetry(); } return; }
   if (cat.jumps < 2) {
     cat.vy = cat.jumps === 0 ? -9 : -7;
     if (cat.jumps === 0) seJump(); else seDoubleJump();
@@ -755,12 +752,18 @@ function scheduleBGM(gen) {
 
 // ── 入力 ────────────────────────────────
 document.addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); } });
+let holdTimer = null;
 document.addEventListener('pointerdown', e => {
-  // ボタンタップはジャンプに使わない
   if (e.target.tagName === 'BUTTON') return;
   e.preventDefault();
+  // ゲームオーバー中に長押し(600ms)でタイトルへ
+  if (state === 'dead' && cat.deadTimer > 30) {
+    holdTimer = setTimeout(() => { doTitle(); }, 600);
+  }
   jump();
 });
+document.addEventListener('pointerup', () => { clearTimeout(holdTimer); });
+document.addEventListener('pointercancel', () => { clearTimeout(holdTimer); });
 
 // ── 描画 ────────────────────────────────
 function draw() {
@@ -1778,9 +1781,9 @@ function drawUI() {
     uiPanelSub.textContent  = '屋根の上を駆け抜けろ！';
     uiPanelSub2.textContent = '';
     document.getElementById('ui-ranking').style.display = 'none';
-    document.getElementById('ui-buttons').style.display = 'none';
     uiPanelHint.textContent = '[ SPACE / TAP ] でスタート';
     uiPanelHint.className   = 'blink hint';
+    document.getElementById('ui-panel-hint2').textContent = '';
   } else if (state === 'dead' && cat.deadTimer > 30) {
     uiPanel.style.display = 'block';
     uiPanelTitle.style.color = '#ff4444';
@@ -1790,18 +1793,17 @@ function drawUI() {
     uiPanelSub2.textContent = ((score|0) >= bestScore && score > 0) ? '★ NEW RECORD! ★' : '';
     uiPanelSub2.style.color = '#ff88ff';
     // ベスト3表示
-    const medals = ['🥇','🥈','🥉'];
     const rankEl = document.getElementById('ui-ranking');
     rankEl.style.display = 'block';
     [1,2,3].forEach(i => {
       const el = document.getElementById(`ui-rank${i}`);
       const s = topScores[i-1];
-      el.textContent = s !== undefined ? `${medals[i-1]} ${s.toString().padStart(6,'0')}` : `${medals[i-1]} ------`;
+      el.style.color = ['#ffff88','#cccccc','#aaaaaa'][i-1];
+      el.textContent = s !== undefined ? `#${i}  ${s.toString().padStart(6,'0')}` : `#${i}  ------`;
     });
-    // ボタン表示
-    document.getElementById('ui-buttons').style.display = 'flex';
-    uiPanelHint.textContent = '';
-    uiPanelHint.className   = '';
+    uiPanelHint.textContent = '[ SPACE / TAP ] でリスタート';
+    uiPanelHint.className   = 'blink hint';
+    document.getElementById('ui-panel-hint2').textContent = 'タイトルへ戻る → 長押し';
   } else {
     uiPanel.style.display = 'none';
   }
