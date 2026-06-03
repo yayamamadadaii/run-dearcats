@@ -76,6 +76,15 @@
     #ui-panel .record { color: #ff88ff; }
     #ui-panel .hint   { color: #00ffaa; }
     #ui-panel .gameover-score { color: #ffff00; }
+    #ui-buttons { display: none; gap: 8px; justify-content: center; flex-wrap: wrap; }
+    #ui-buttons button {
+      background: #1a2a3a; color: #fff;
+      border: 1px solid #446; border-radius: 4px;
+      padding: 6px 14px; font-size: 0.85em; cursor: pointer;
+      font-family: 'Courier New', monospace;
+      transition: background 0.15s;
+    }
+    #ui-buttons button:hover, #ui-buttons button:active { background: #2a4a6a; }
 
     /* フルスクリーン時にcanvasを画面いっぱいに */
     :fullscreen #wrapper, :-webkit-full-screen #wrapper {
@@ -102,6 +111,16 @@
       <h1 id="ui-panel-title"></h1>
       <p  id="ui-panel-sub"></p>
       <p  id="ui-panel-sub2"></p>
+      <div id="ui-ranking" style="display:none; margin: 6px 0;">
+        <p style="color:#aaa; font-size:0.75em; margin-bottom:4px;">── BEST SCORES ──</p>
+        <p id="ui-rank1" style="color:#ffd700"></p>
+        <p id="ui-rank2" style="color:#c0c0c0"></p>
+        <p id="ui-rank3" style="color:#cd7f32"></p>
+      </div>
+      <div id="ui-buttons" style="display:none; margin-top:10px; display:none;">
+        <button id="btn-retry" onclick="doRetry()">🔄 リトライ</button>
+        <button id="btn-title" onclick="doTitle()">🏠 タイトルへ</button>
+      </div>
       <p  id="ui-panel-hint" class="blink hint"></p>
     </div>
   </div>
@@ -188,6 +207,8 @@ function reset() {
 }
 
 let score = 0, bestScore = 0;
+// ベスト3スコア（localStorage保存）
+let topScores = JSON.parse(localStorage.getItem('neko_top3') || '[]');
 let cat, roofs, obstacles, billboards, fireworks, fwQueue, bats, scrollX, speed, spawnTimer, obstacleTimer, batTimer, particles, tick;
 let hitTimer, angryObstacle, lastBillboardMilestone, fwFlags;
 
@@ -288,7 +309,12 @@ function update(dt) {
     // コウモリ衝突は短縮演出（即ビビり→逃走）
     const hitLimit = angryObstacle ? 160 : 80;
     if (hitTimer > hitLimit) {
-      if (score > bestScore) bestScore = score;
+      const s = score | 0;
+      if (s > bestScore) bestScore = s;
+      topScores.push(s);
+      topScores.sort((a, b) => b - a);
+      topScores = topScores.slice(0, 3);
+      localStorage.setItem('neko_top3', JSON.stringify(topScores));
       state = 'dead';
       cat.dead = true;
       cat.deadTimer = 0;
@@ -470,10 +496,23 @@ function die() {
   if (state === 'dead' || state === 'hit') return;
   state = 'dead';
   cat.dead = true;
-  if (score > bestScore) bestScore = score;
+  const s = score | 0;
+  if (s > bestScore) bestScore = s;
+  // トップ3更新
+  topScores.push(s);
+  topScores.sort((a, b) => b - a);
+  topScores = topScores.slice(0, 3);
+  localStorage.setItem('neko_top3', JSON.stringify(topScores));
   spawnParticles(cat.x + 8, cat.y + 8);
   stopBGM();
   seGameOver();
+}
+
+function doRetry() {
+  reset(); state = 'play'; startBGM();
+}
+function doTitle() {
+  reset();
 }
 
 function spawnParticles(x, y) {
@@ -1714,6 +1753,8 @@ function drawUI() {
     uiPanelTitle.textContent = '走れねこ様';
     uiPanelSub.textContent  = '屋根の上を駆け抜けろ！';
     uiPanelSub2.textContent = '';
+    document.getElementById('ui-ranking').style.display = 'none';
+    document.getElementById('ui-buttons').style.display = 'none';
     uiPanelHint.textContent = '[ SPACE / TAP ] でスタート';
     uiPanelHint.className   = 'blink hint';
   } else if (state === 'dead' && cat.deadTimer > 30) {
@@ -1722,11 +1763,21 @@ function drawUI() {
     uiPanelTitle.textContent = 'GAME OVER';
     uiPanelSub.className  = 'gameover-score';
     uiPanelSub.textContent = `SCORE: ${(score|0)}`;
-    uiPanelSub2.textContent = (score >= bestScore && score > 0) ? '★ NEW RECORD! ★' : '';
+    uiPanelSub2.textContent = ((score|0) >= bestScore && score > 0) ? '★ NEW RECORD! ★' : '';
     uiPanelSub2.style.color = '#ff88ff';
-    uiPanelHint.textContent = '[ SPACE / TAP ] でリトライ';
-    uiPanelHint.className   = 'blink';
-    uiPanelHint.style.color = '#aaaaaa';
+    // ベスト3表示
+    const medals = ['🥇','🥈','🥉'];
+    const rankEl = document.getElementById('ui-ranking');
+    rankEl.style.display = 'block';
+    [1,2,3].forEach(i => {
+      const el = document.getElementById(`ui-rank${i}`);
+      const s = topScores[i-1];
+      el.textContent = s !== undefined ? `${medals[i-1]} ${s.toString().padStart(6,'0')}` : `${medals[i-1]} ------`;
+    });
+    // ボタン表示
+    document.getElementById('ui-buttons').style.display = 'flex';
+    uiPanelHint.textContent = '';
+    uiPanelHint.className   = '';
   } else {
     uiPanel.style.display = 'none';
   }
