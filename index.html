@@ -120,6 +120,9 @@
 <button id="btn-fullscreen" title="フルスクリーン" onclick="toggleFullscreen()">⛶</button>
 <div id="wrapper">
   <canvas id="c" width="400" height="240"></canvas>
+  <div id="countdown-overlay" style="display:none; position:absolute; inset:0; align-items:center; justify-content:center; pointer-events:none; z-index:10;">
+    <span id="countdown-num" style="font-family:'Courier New',monospace; font-weight:bold; color:#ffffff; text-shadow:0 0 20px #fff, 0 0 40px #88aaff;"></span>
+  </div>
   <div id="ui-overlay">
     <div id="ui-score">
       <div class="label" id="ui-score-val">SCORE: 000000</div>
@@ -357,11 +360,11 @@ function update(dt) {
   // スコア3000でコウモリ大群
   if (score >= 3000 && !batSwarmDone) {
     batSwarmDone = true;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 50; i++) {
       setTimeout(() => {
         const y = H * 0.2 + Math.random() * H * 0.5;
-        bats.push({ x: W + 20 + i * 30, baseY: y, y, t: Math.random() * Math.PI * 2 });
-      }, i * 80);
+        bats.push({ x: W + 20 + i * 15, baseY: y, y, t: Math.random() * Math.PI * 2, swarm: true });
+      }, i * 30);
     }
   }
 
@@ -448,7 +451,7 @@ function update(dt) {
 
   // ── コウモリ ────────────────────────────
   bats.forEach(b => {
-    b.x -= (speed + 1.5) * dt; // 少し速め
+    b.x -= (speed + (b.swarm ? 4 : 1.5)) * dt; // 大群は速め
     b.t += 0.07 * dt;
     b.y = b.baseY + Math.sin(b.t) * 18; // 上下にうねる
   });
@@ -1881,20 +1884,11 @@ function drawScaredCat() {
 
 function drawUI() {
   // スコア・ベスト（HTML）
-  uiScoreVal.textContent = `SCORE: ${(score|0).toString().padStart(6,'0')}`;
-  uiBestVal.textContent  = `BEST : ${(bestScore|0).toString().padStart(6,'0')}`;
+  uiScoreVal.textContent = `SCORE: ${(score|0).toString().padStart(6,'0')}m`;
+  uiBestVal.textContent  = `BEST : ${(bestScore|0).toString().padStart(6,'0')}m`;
 
   // パネル（タイトル / ゲームオーバー）
-  if (state === 'countdown') {
-    uiPanel.style.display = 'block';
-    uiPanelTitle.style.color = '#ffffff';
-    uiPanelTitle.textContent = countdownVal > 0 ? String(countdownVal) : 'GO!';
-    uiPanelSub.textContent = '';
-    uiPanelSub2.textContent = '';
-    document.getElementById('ui-ranking').style.display = 'none';
-    uiPanelHint.textContent = '';
-    document.getElementById('ui-panel-hint2').textContent = '';
-  } else if (state === 'title') {
+  if (state === 'title') {
     uiPanel.style.display = 'block';
     uiPanelTitle.style.color = '#ffff00';
     uiPanelTitle.textContent = '走れねこ様';
@@ -1909,7 +1903,7 @@ function drawUI() {
     uiPanelTitle.style.color = '#ff4444';
     uiPanelTitle.textContent = 'GAME OVER';
     uiPanelSub.className  = 'gameover-score';
-    uiPanelSub.textContent = `SCORE: ${(score|0)}`;
+    uiPanelSub.textContent = `SCORE: ${(score|0)}m`;
     uiPanelSub2.textContent = ((score|0) >= bestScore && score > 0) ? '★ NEW RECORD! ★' : '';
     uiPanelSub2.style.color = '#ff88ff';
     // ベスト3表示
@@ -1919,13 +1913,26 @@ function drawUI() {
       const el = document.getElementById(`ui-rank${i}`);
       const s = topScores[i-1];
       el.style.color = ['#ffff88','#cccccc','#aaaaaa'][i-1];
-      el.textContent = s !== undefined ? `#${i}  ${s.toString().padStart(6,'0')}` : `#${i}  ------`;
+      el.textContent = s !== undefined ? `#${i}  ${s.toString().padStart(6,'0')}m` : `#${i}  ------`;
     });
     uiPanelHint.textContent = '[ SPACE / TAP ] でリスタート';
     uiPanelHint.className   = 'blink hint';
     document.getElementById('ui-panel-hint2').textContent = '▶ タイトルへ戻る';
   } else {
     uiPanel.style.display = 'none';
+  }
+
+  // カウントダウン表示
+  const cdOverlay = document.getElementById('countdown-overlay');
+  const cdNum     = document.getElementById('countdown-num');
+  if (state === 'countdown') {
+    cdOverlay.style.display = 'flex';
+    const label = countdownVal > 0 ? String(countdownVal) : 'GO!';
+    const size  = countdownVal > 0 ? Math.floor(120 * currentScale) : Math.floor(60 * currentScale);
+    cdNum.textContent  = label;
+    cdNum.style.fontSize = size + 'px';
+  } else {
+    cdOverlay.style.display = 'none';
   }
 }
 
