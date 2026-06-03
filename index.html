@@ -204,7 +204,9 @@ const STARS = Array.from({length:60}, () => ({
 }));
 
 // ── 状態 ────────────────────────────────
-let state; // 'title' | 'play' | 'hit' | 'dead'
+let state; // 'title' | 'countdown' | 'play' | 'hit' | 'dead'
+let countdownVal = 3, countdownTimer = 0;
+let batSwarmDone = false;
 function reset() {
   state = 'title';
   score = 0; bestScore = bestScore || 0;
@@ -213,6 +215,7 @@ function reset() {
   scrollX = 0; speed = 2.2; spawnTimer = 0; obstacleTimer = 0; batTimer = 0; mouseTimer = 0;
   hitTimer = 0; angryObstacle = null; lastBillboardMilestone = 0;
   fwFlags = { 1000: false, 1500: false, 2000: false };
+  countdownVal = 3; countdownTimer = 0; batSwarmDone = false;
   roofs.push(mkRoof(0, H - 70, 200));
   roofs.push(mkRoof(220, H - 90, 150));
   roofs.push(mkRoof(390, H - 60, 180));
@@ -338,7 +341,29 @@ function update(dt) {
     return;
   }
 
+  // カウントダウン処理
+  if (state === 'countdown') {
+    countdownTimer += dt;
+    if (countdownTimer >= 60) { // 1秒ごとにカウント
+      countdownTimer = 0;
+      countdownVal--;
+      if (countdownVal <= 0) { state = 'play'; startBGM(); }
+    }
+    return;
+  }
+
   if (state !== 'play') return;
+
+  // スコア3000でコウモリ大群
+  if (score >= 3000 && !batSwarmDone) {
+    batSwarmDone = true;
+    for (let i = 0; i < 20; i++) {
+      setTimeout(() => {
+        const y = H * 0.2 + Math.random() * H * 0.5;
+        bats.push({ x: W + 20 + i * 30, baseY: y, y, t: Math.random() * Math.PI * 2 });
+      }, i * 80);
+    }
+  }
 
   // スコア・速度
   score += dt * 0.4;
@@ -446,13 +471,14 @@ function update(dt) {
 
   // ネズミ：移動・アニメ
   mice.forEach(m => {
-    m.x += m.vx * dt;
+    // 屋根と一緒にスクロール＋自分の歩き
+    m.x += (m.walkVx - speed) * dt;
+    m.y = m.roof.y - 10; // 常に屋根の上に貼り付け
     m.t += dt;
     // 乗ってる屋根の端で反転
-    if (m.roof) {
-      if (m.x < m.roof.x + 2)       { m.vx =  Math.abs(m.vx); }
-      if (m.x + 12 > m.roof.x + m.roof.w - 2) { m.vx = -Math.abs(m.vx); }
-    }
+    if (m.x < m.roof.x + 2)              { m.walkVx =  Math.abs(m.walkVx); }
+    if (m.x + 12 > m.roof.x + m.roof.w - 2) { m.walkVx = -Math.abs(m.walkVx); }
+    m.vx = m.walkVx; // drawMouseの向き判定用
   });
   mice = mice.filter(m => m.x + 14 > -10 && m.x < W + 20);
 
@@ -461,19 +487,23 @@ function update(dt) {
     mouseTimer -= dt;
     if (mouseTimer <= 0) {
       // 画面外右側の屋根を探す
-      const candidates = roofs.filter(r => r.x > W * 0.8 && r.w > 40);
+      const candidates = roofs.filter(r => r.x > W * 0.5 && r.x < W * 1.5 && r.w > 30);
       if (candidates.length > 0) {
         const roof = candidates[Math.floor(Math.random() * candidates.length)];
+        const walkVx = (Math.random() < 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.4);
         mice.push({
           x: roof.x + 10,
           y: roof.y - 10,
-          vx: (Math.random() < 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.4),
+          vx: walkVx,
+          walkVx,
           t: 0,
           roof
         });
       }
-      // 出現間隔：低めの頻度（300〜500フレーム）
-      mouseTimer = 300 + Math.random() * 200;
+      // 出現間隔：スコア500ごとに短縮（最小60）
+      const rank = Math.floor(score / 500);
+      const base = Math.max(60, 200 - rank * 25);
+      mouseTimer = base + Math.random() * 60;
     }
   }
 
@@ -492,9 +522,10 @@ function update(dt) {
     }
   }
 
-  // ネズミとの当たり判定
+  // ネズミとの当たり判定（猫の足元付近で判定）
+  const mcx = cat.x + 8, mcy = cat.y + 14;
   for (const m of mice) {
-    if (cx2 > m.x + 2 && cx2 < m.x + 10 && cy2 > m.y + 2 && cy2 < m.y + 9) {
+    if (mcx > m.x + 1 && mcx < m.x + 11 && mcy > m.y && mcy < m.y + 10) {
       state = 'hit'; hitTimer = 0; angryObstacle = null;
       cat.vy = 0; stopBGM(); seHit();
       setTimeout(() => seScared(), 600);
@@ -577,7 +608,7 @@ function toggleFullscreen() {
 }
 
 function doRetry() {
-  reset(); state = 'play'; startBGM();
+  reset(); state = 'countdown'; countdownVal = 3; countdownTimer = 0;
 }
 function doTitle() {
   reset();
@@ -591,7 +622,8 @@ function spawnParticles(x, y) {
 }
 
 function jump() {
-  if (state === 'title') { reset(); state = 'play'; startBGM(); return; }
+  if (state === 'title') { reset(); state = 'countdown'; countdownVal = 3; countdownTimer = 0; return; }
+  if (state === 'countdown') return;
   if (state === 'dead') { if (cat.deadTimer > 30) { doRetry(); } return; }
   if (cat.jumps < 2) {
     cat.vy = cat.jumps === 0 ? -9 : -7;
@@ -1484,14 +1516,14 @@ function drawMouse(m) {
   const dir = m.vx > 0 ? 1 : -1; // 向き
   const walk = Math.floor(m.t / 8) % 2; // 歩きアニメ
 
-  // 体
-  ctx.fillStyle = '#888888';
+  // 体（黄土色系）
+  ctx.fillStyle = '#aa9944';
   ctx.fillRect(mx + 2, my + 4, 8, 5);
   // 頭
-  ctx.fillStyle = '#999999';
+  ctx.fillStyle = '#bbaa55';
   ctx.fillRect(mx + (dir > 0 ? 7 : 1), my + 2, 5, 5);
   // 耳
-  ctx.fillStyle = '#bbbbbb';
+  ctx.fillStyle = '#ccbb66';
   ctx.fillRect(mx + (dir > 0 ? 8 : 2), my,     2, 3);
   ctx.fillStyle = '#ffaaaa';
   ctx.fillRect(mx + (dir > 0 ? 9 : 3), my + 1, 1, 1);
@@ -1502,7 +1534,7 @@ function drawMouse(m) {
   ctx.fillStyle = '#ffaaaa';
   ctx.fillRect(mx + (dir > 0 ? 11 : 1), my + 4, 1, 1);
   // しっぽ
-  ctx.fillStyle = '#aaaaaa';
+  ctx.fillStyle = '#998833';
   if (dir > 0) {
     ctx.fillRect(mx,     my + 6, 3, 1);
     ctx.fillRect(mx - 1, my + 7, 2, 1);
@@ -1511,7 +1543,7 @@ function drawMouse(m) {
     ctx.fillRect(mx + 11, my + 7, 2, 1);
   }
   // 足（歩きアニメ）
-  ctx.fillStyle = '#777777';
+  ctx.fillStyle = '#887733';
   if (walk === 0) {
     ctx.fillRect(mx + 3, my + 8, 2, 2);
     ctx.fillRect(mx + 7, my + 8, 2, 2);
@@ -1853,7 +1885,16 @@ function drawUI() {
   uiBestVal.textContent  = `BEST : ${(bestScore|0).toString().padStart(6,'0')}`;
 
   // パネル（タイトル / ゲームオーバー）
-  if (state === 'title') {
+  if (state === 'countdown') {
+    uiPanel.style.display = 'block';
+    uiPanelTitle.style.color = '#ffffff';
+    uiPanelTitle.textContent = countdownVal > 0 ? String(countdownVal) : 'GO!';
+    uiPanelSub.textContent = '';
+    uiPanelSub2.textContent = '';
+    document.getElementById('ui-ranking').style.display = 'none';
+    uiPanelHint.textContent = '';
+    document.getElementById('ui-panel-hint2').textContent = '';
+  } else if (state === 'title') {
     uiPanel.style.display = 'block';
     uiPanelTitle.style.color = '#ffff00';
     uiPanelTitle.textContent = '走れねこ様';
