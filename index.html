@@ -300,7 +300,7 @@ function update(dt) {
     cat.deadTimer += dt;
     // 左へ全力逃走
     cat.x -= (6 + cat.deadTimer * 0.05) * dt;
-    if (cat.deadTimer > 30 && cat.x < -40) state = 'title';
+    // ボタンで操作するので自動タイトル遷移なし
     return;
   }
 
