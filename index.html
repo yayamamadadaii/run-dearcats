@@ -136,7 +136,7 @@
         <p id="ui-rank3"></p>
       </div>
       <p  id="ui-panel-hint" class="blink hint"></p>
-      <p  id="ui-panel-hint2" style="font-size:0.75em; color:#888; margin-top:4px;"></p>
+      <p  id="ui-panel-hint2" style="font-size:0.75em; color:#888; margin-top:4px; pointer-events:auto; cursor:pointer;" onclick="doTitle()"></p>
     </div>
   </div>
   <div id="info">SPACE / TAP: ジャンプ &nbsp;|&nbsp; 2回でニャンブル！</div>
@@ -752,18 +752,11 @@ function scheduleBGM(gen) {
 
 // ── 入力 ────────────────────────────────
 document.addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); } });
-let holdTimer = null;
 document.addEventListener('pointerdown', e => {
-  if (e.target.tagName === 'BUTTON') return;
+  if (e.target.tagName === 'BUTTON' || e.target.id === 'ui-panel-hint2') return;
   e.preventDefault();
-  // ゲームオーバー中に長押し(600ms)でタイトルへ
-  if (state === 'dead' && cat.deadTimer > 30) {
-    holdTimer = setTimeout(() => { doTitle(); }, 600);
-  }
   jump();
 });
-document.addEventListener('pointerup', () => { clearTimeout(holdTimer); });
-document.addEventListener('pointercancel', () => { clearTimeout(holdTimer); });
 
 // ── 描画 ────────────────────────────────
 function draw() {
@@ -1803,7 +1796,7 @@ function drawUI() {
     });
     uiPanelHint.textContent = '[ SPACE / TAP ] でリスタート';
     uiPanelHint.className   = 'blink hint';
-    document.getElementById('ui-panel-hint2').textContent = 'タイトルへ戻る → 長押し';
+    document.getElementById('ui-panel-hint2').textContent = '▶ タイトルへ戻る';
   } else {
     uiPanel.style.display = 'none';
   }
