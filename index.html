@@ -209,8 +209,8 @@ function reset() {
   state = 'title';
   score = 0; bestScore = bestScore || 0;
   cat = { x: 80, y: 0, vy: 0, onGround: false, jumps: 0, frame: 0, ft: 0, dead: false, deadTimer: 0, blinkT: 0 };
-  roofs = []; obstacles = []; billboards = []; fireworks = []; fwQueue = []; bats = [];
-  scrollX = 0; speed = 2.2; spawnTimer = 0; obstacleTimer = 0; batTimer = 0;
+  roofs = []; obstacles = []; billboards = []; fireworks = []; fwQueue = []; bats = []; mice = [];
+  scrollX = 0; speed = 2.2; spawnTimer = 0; obstacleTimer = 0; batTimer = 0; mouseTimer = 0;
   hitTimer = 0; angryObstacle = null; lastBillboardMilestone = 0;
   fwFlags = { 1000: false, 1500: false, 2000: false };
   roofs.push(mkRoof(0, H - 70, 200));
@@ -224,7 +224,7 @@ function reset() {
 let score = 0, bestScore = 0;
 // ベスト3スコア（localStorage保存）
 let topScores = JSON.parse(localStorage.getItem('neko_top3') || '[]');
-let cat, roofs, obstacles, billboards, fireworks, fwQueue, bats, scrollX, speed, spawnTimer, obstacleTimer, batTimer, particles, tick;
+let cat, roofs, obstacles, billboards, fireworks, fwQueue, bats, mice, scrollX, speed, spawnTimer, obstacleTimer, batTimer, mouseTimer, particles, tick;
 let hitTimer, angryObstacle, lastBillboardMilestone, fwFlags;
 
 // ── 看板データ ────────────────────────────
@@ -444,6 +444,39 @@ function update(dt) {
     }
   }
 
+  // ネズミ：移動・アニメ
+  mice.forEach(m => {
+    m.x += m.vx * dt;
+    m.t += dt;
+    // 乗ってる屋根の端で反転
+    if (m.roof) {
+      if (m.x < m.roof.x + 2)       { m.vx =  Math.abs(m.vx); }
+      if (m.x + 12 > m.roof.x + m.roof.w - 2) { m.vx = -Math.abs(m.vx); }
+    }
+  });
+  mice = mice.filter(m => m.x + 14 > -10 && m.x < W + 20);
+
+  // スコア1000以上でスポーン（出現率低め）
+  if (score > 1000) {
+    mouseTimer -= dt;
+    if (mouseTimer <= 0) {
+      // 画面外右側の屋根を探す
+      const candidates = roofs.filter(r => r.x > W * 0.8 && r.w > 40);
+      if (candidates.length > 0) {
+        const roof = candidates[Math.floor(Math.random() * candidates.length)];
+        mice.push({
+          x: roof.x + 10,
+          y: roof.y - 10,
+          vx: (Math.random() < 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.4),
+          t: 0,
+          roof
+        });
+      }
+      // 出現間隔：低めの頻度（300〜500フレーム）
+      mouseTimer = 300 + Math.random() * 200;
+    }
+  }
+
   // コウモリとの当たり判定
   const cx2 = cat.x + 8, cy2 = cat.y + 8;
   for (const b of bats) {
@@ -454,6 +487,16 @@ function update(dt) {
       cat.vy = 0;
       stopBGM();
       seHit();
+      setTimeout(() => seScared(), 600);
+      break;
+    }
+  }
+
+  // ネズミとの当たり判定
+  for (const m of mice) {
+    if (cx2 > m.x + 2 && cx2 < m.x + 10 && cy2 > m.y + 2 && cy2 < m.y + 9) {
+      state = 'hit'; hitTimer = 0; angryObstacle = null;
+      cat.vy = 0; stopBGM(); seHit();
       setTimeout(() => seScared(), 600);
       break;
     }
@@ -792,6 +835,7 @@ function draw() {
 
   // コウモリ
   bats.forEach(drawBat);
+  mice.forEach(drawMouse);
 
   // 障害物（寝てる猫 or 怒り猫）
   obstacles.forEach(o => {
@@ -1433,6 +1477,48 @@ function drawBat(b) {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(bx + 7, by + 5, 1, 2);
   ctx.fillRect(bx + 9, by + 5, 1, 2);
+}
+
+function drawMouse(m) {
+  const mx = m.x|0, my = m.y|0;
+  const dir = m.vx > 0 ? 1 : -1; // 向き
+  const walk = Math.floor(m.t / 8) % 2; // 歩きアニメ
+
+  // 体
+  ctx.fillStyle = '#888888';
+  ctx.fillRect(mx + 2, my + 4, 8, 5);
+  // 頭
+  ctx.fillStyle = '#999999';
+  ctx.fillRect(mx + (dir > 0 ? 7 : 1), my + 2, 5, 5);
+  // 耳
+  ctx.fillStyle = '#bbbbbb';
+  ctx.fillRect(mx + (dir > 0 ? 8 : 2), my,     2, 3);
+  ctx.fillStyle = '#ffaaaa';
+  ctx.fillRect(mx + (dir > 0 ? 9 : 3), my + 1, 1, 1);
+  // 目
+  ctx.fillStyle = '#ff3333';
+  ctx.fillRect(mx + (dir > 0 ? 10 : 2), my + 3, 1, 1);
+  // 鼻
+  ctx.fillStyle = '#ffaaaa';
+  ctx.fillRect(mx + (dir > 0 ? 11 : 1), my + 4, 1, 1);
+  // しっぽ
+  ctx.fillStyle = '#aaaaaa';
+  if (dir > 0) {
+    ctx.fillRect(mx,     my + 6, 3, 1);
+    ctx.fillRect(mx - 1, my + 7, 2, 1);
+  } else {
+    ctx.fillRect(mx + 9, my + 6, 3, 1);
+    ctx.fillRect(mx + 11, my + 7, 2, 1);
+  }
+  // 足（歩きアニメ）
+  ctx.fillStyle = '#777777';
+  if (walk === 0) {
+    ctx.fillRect(mx + 3, my + 8, 2, 2);
+    ctx.fillRect(mx + 7, my + 8, 2, 2);
+  } else {
+    ctx.fillRect(mx + 4, my + 8, 2, 2);
+    ctx.fillRect(mx + 6, my + 8, 2, 2);
+  }
 }
 
 // 寝ている猫（障害物）
