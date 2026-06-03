@@ -728,6 +728,8 @@ function scheduleBGM(gen) {
 // ── 入力 ────────────────────────────────
 document.addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); } });
 document.addEventListener('pointerdown', e => {
+  // ボタンタップはジャンプに使わない
+  if (e.target.tagName === 'BUTTON') return;
   e.preventDefault();
   // モバイルでタップ時にフルスクリーン要求（初回タップ時のみ）
   if (!document.fullscreenElement) {
