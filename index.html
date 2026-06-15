@@ -120,6 +120,46 @@
       border: none;
     }
 
+  /* ── CRTエフェクト（①） ── */
+  #crt-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 100;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  #crt-overlay::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0px,
+      transparent 2px,
+      rgba(0, 0, 0, 0.18) 2px,
+      rgba(0, 0, 0, 0.18) 4px
+    );
+    pointer-events: none;
+  }
+  #crt-overlay::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(
+      ellipse at center,
+      transparent 60%,
+      rgba(0, 0, 0, 0.55) 100%
+    );
+    pointer-events: none;
+  }
+  /* ②ドット感＋軽くフィルター */
+  canvas {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    filter: contrast(1.08) brightness(0.92) saturate(1.1);
+  }
+
   </style>
 </head>
 <body>
@@ -127,6 +167,7 @@
 <button id="btn-fullscreen" title="フルスクリーン" onclick="toggleFullscreen()">⛶</button>
 <div id="wrapper">
   <canvas id="c" width="400" height="240"></canvas>
+  <div id="crt-overlay"></div>
   <div id="countdown-overlay" style="display:none; position:absolute; inset:0; align-items:center; justify-content:center; pointer-events:none; z-index:10;">
     <span id="countdown-num" style="font-family:'Courier New',monospace; font-weight:bold; color:#ffffff; text-shadow:0 0 20px #fff, 0 0 40px #88aaff;"></span>
   </div>
@@ -220,7 +261,7 @@ let batSwarmDone = false;
 function reset() {
   state = 'title';
   score = 0; bestScore = bestScore || 0;
-  cat = { x: 80, y: 0, vy: 0, onGround: false, jumps: 0, frame: 0, ft: 0, dead: false, deadTimer: 0, blinkT: 0 };
+  cat = { x: 80, y: 0, vy: 0, onGround: false, jumps: 0, frame: 0, ft: 0, dead: false, deadTimer: 0, blinkT: 0, spinT: 0 };
   roofs = []; obstacles = []; billboards = []; fireworks = []; fwQueue = []; bats = []; mice = [];
   scrollX = 0; speed = 2.2; spawnTimer = 0; obstacleTimer = 0; batTimer = 0; mouseTimer = 0;
   hitTimer = 0; angryObstacle = null; lastBillboardMilestone = 0;
@@ -231,13 +272,14 @@ function reset() {
   roofs.push(mkRoof(390, H - 60, 180));
   placeCat();
   particles = [];
+  airPuffs = [];
   tick = 0;
 }
 
 let score = 0, bestScore = 0;
 // ベスト3スコア（localStorage保存）
 let topScores = JSON.parse(localStorage.getItem('neko_top3') || '[]');
-let cat, roofs, obstacles, billboards, fireworks, fwQueue, bats, mice, scrollX, speed, spawnTimer, obstacleTimer, batTimer, mouseTimer, particles, tick;
+let cat, roofs, obstacles, billboards, fireworks, fwQueue, bats, mice, scrollX, speed, spawnTimer, obstacleTimer, batTimer, mouseTimer, particles, airPuffs, tick;
 let hitTimer, angryObstacle, lastBillboardMilestone, fwFlags;
 
 // ── 看板データ ────────────────────────────
@@ -304,7 +346,7 @@ function placeCat() {
   const r = roofs[0];
   cat.y = r.y - 18;
   cat.x = r.x + 40;
-  cat.vy = 0; cat.onGround = true; cat.jumps = 0;
+  cat.vy = 0; cat.onGround = true; cat.jumps = 0; cat.spinT = 0;
 }
 
 // ── メインループ ──────────────────────────
@@ -323,6 +365,9 @@ function update(dt) {
   const scroll = state === 'play' ? speed : 0;
   particles.forEach(p => { p.x += p.vx*dt - scroll*dt; p.y += p.vy*dt; p.vy += 0.15*dt; p.life -= dt; });
   particles = particles.filter(p => p.life > 0);
+  if (cat.spinT > 0) cat.spinT -= dt;
+  airPuffs.forEach(p => p.t += dt);
+  airPuffs = airPuffs.filter(p => p.t < p.maxT);
 
   if (state === 'dead') {
     cat.deadTimer += dt;
@@ -358,6 +403,7 @@ function update(dt) {
       countdownTimer = 0;
       countdownVal--;
       if (countdownVal <= 0) { state = 'play'; startBGM(); }
+      else { seCountdown(); }
     }
     return;
   }
@@ -559,8 +605,9 @@ function update(dt) {
     }
   }
 
-  // 猫物理
-  cat.vy += 0.5 * dt;
+  // 猫物理（2段ジャンプ後は重力を弱めてゆっくり落下）
+  const grav = (cat.jumps === 2 && cat.vy > 0) ? 0.25 : 0.5;
+  cat.vy += grav * dt;
   cat.y += cat.vy * dt;
 
   // 接地判定（トンネリング防止: 前フレームと現フレームの間を線形補間でチェック）
@@ -572,7 +619,7 @@ function update(dt) {
     const prevCy = cy - cat.vy * dt; // 今フレームの移動前の足元Y
     // X範囲内かつ、今フレームに屋根面を通過または着地したか
     if (cx > r.x && cx < r.x + r.w && cat.vy >= 0 && prevCy <= r.y + 1 && cy >= r.y) {
-      cat.y = r.y - 18; cat.vy = 0; cat.onGround = true; cat.jumps = 0;
+      cat.y = r.y - 18; cat.vy = 0; cat.onGround = true; cat.jumps = 0; cat.spinT = 0;
       if (!wasOnGround) seLand();
       break;
     }
@@ -618,7 +665,7 @@ function toggleFullscreen() {
 }
 
 function doRetry() {
-  reset(); state = 'countdown'; countdownVal = 3; countdownTimer = 0;
+  reset(); state = 'countdown'; countdownVal = 3; countdownTimer = 0; seCountdown();
 }
 function doTitle() {
   reset();
@@ -632,12 +679,19 @@ function spawnParticles(x, y) {
 }
 
 function jump() {
-  if (state === 'title') { reset(); state = 'countdown'; countdownVal = 3; countdownTimer = 0; return; }
+  if (state === 'title') { reset(); state = 'countdown'; countdownVal = 3; countdownTimer = 0; seCountdown(); return; }
   if (state === 'countdown') return;
   if (state === 'dead') { if (cat.deadTimer > 30) { doRetry(); } return; }
   if (cat.jumps < 2) {
     cat.vy = cat.jumps === 0 ? -9 : -7;
-    if (cat.jumps === 0) seJump(); else seDoubleJump();
+    if (cat.jumps === 0) {
+      seJump();
+    } else {
+      seDoubleJump();
+      cat.spinT = 20;
+      // 足元に空気の塊（ボフ）
+      airPuffs.push({ x: cat.x + 9, y: cat.y + 16, t: 0, maxT: 18 });
+    }
     cat.jumps++;
     cat.onGround = false;
   }
@@ -729,6 +783,9 @@ function seGameOver() {
   // 逃げる音（下降メロディ）
   [440,330,220,165].forEach((f,i) => beep(f, 0.12, 'square', 0.15, i*0.1));
 }
+function seCountdown() {
+  beep(660, 0.07, 'square', 0.18);
+}
 function seScared() {
   // ビビり音（高音トレモロ）
   beep(880, 0.05, 'square', 0.08);
@@ -736,10 +793,120 @@ function seScared() {
   beep(880, 0.05, 'square', 0.08, 0.12);
 }
 
-// BGM（8ビット風ループメロディ）
+// ── BGM MODE ────────────────────────────
+// 'arranged' → Valley of Vinesアレンジ（8ビット風）
+// 'original' → 元の8ビットBGM
+// 'mp3'      → Padded_Paws.mp3 そのまま
+// 'arranged' → 8ビットアレンジ（Gメジャー・DKCボーナス風）
+// 'original' → 元の8ビットBGM
+const BGM_MODE = 'arranged';
+
+// ピッチ倍率（スピードに比例）
+function getBGMPitch() {
+  const baseSpeed = 2.2;
+  const maxSpeed  = 7.0;
+  const minPitch  = 1.0;
+  const maxPitch  = 1.35;
+  const t = Math.min((speed - baseSpeed) / (maxSpeed - baseSpeed), 1);
+  return minPitch + (maxPitch - minPitch) * t;
+}
+
+// ── アレンジBGM（元メロディ＋パーカッション）──
+// 元の MELODY / BASS をそのまま使い、ドラムを追加
+
+// ドラム音生成ユーティリティ
+function scheduleKick(ac, t, dst) {
+  const osc = ac.createOscillator();
+  const g = ac.createGain();
+  osc.frequency.setValueAtTime(160, t);
+  osc.frequency.exponentialRampToValueAtTime(40, t + 0.18);
+  g.gain.setValueAtTime(0.7, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+  osc.connect(g); g.connect(dst);
+  osc.start(t); osc.stop(t + 0.25);
+  bgmNodes.push(osc);
+}
+
+function scheduleSnare(ac, t, dst) {
+  const len = Math.floor(ac.sampleRate * 0.12);
+  const buf = ac.createBuffer(1, len, ac.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  const src = ac.createBufferSource();
+  src.buffer = buf;
+  const g = ac.createGain();
+  g.gain.setValueAtTime(0.18, t);
+  src.connect(g); g.connect(dst);
+  src.start(t);
+  bgmNodes.push(src);
+}
+
+function scheduleHiHat(ac, t, dst, vol = 0.07) {
+  const len = Math.floor(ac.sampleRate * 0.035);
+  const buf = ac.createBuffer(1, len, ac.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  const src = ac.createBufferSource();
+  src.buffer = buf;
+  const filt = ac.createBiquadFilter();
+  filt.type = 'highpass'; filt.frequency.value = 7000;
+  const g = ac.createGain();
+  g.gain.setValueAtTime(vol, t);
+  src.connect(filt); filt.connect(g); g.connect(dst);
+  src.start(t);
+  bgmNodes.push(src);
+}
+
+// ── MP3モード ────────────────────────────
+let bgmBuffer = null;
+let bgmSource = null;
+let bgmGainNode = null;
+
+async function loadBGMBuffer() {
+  if (BGM_MODE !== 'mp3') return;
+  try {
+    const ac = getAudioCtx();
+    const res = await fetch('bgm_padded.mp3');
+    const arr = await res.arrayBuffer();
+    bgmBuffer = await ac.decodeAudioData(arr);
+  } catch(e) { console.warn('BGM MP3 load failed', e); }
+}
+loadBGMBuffer();
+
+function startBGM() {
+  stopBGM();
+  if (BGM_MODE === 'mp3') {
+    if (!bgmBuffer) return;
+    const ac = getAudioCtx();
+    bgmGainNode = ac.createGain();
+    bgmGainNode.gain.setValueAtTime(0.55, ac.currentTime);
+    bgmGainNode.connect(ac.destination);
+    bgmSource = ac.createBufferSource();
+    bgmSource.buffer = bgmBuffer;
+    bgmSource.loop = true;
+    bgmSource.playbackRate.setValueAtTime(getBGMPitch(), ac.currentTime);
+    bgmSource.connect(bgmGainNode);
+    bgmSource.start();
+  } else {
+    bgmRunning = true;
+    bgmGeneration++;
+    scheduleBGM(bgmGeneration);
+  }
+}
+
+function stopBGM() {
+  if (bgmSource) { try { bgmSource.stop(); } catch(e){} bgmSource = null; }
+  if (bgmGainNode) { bgmGainNode.disconnect(); bgmGainNode = null; }
+  bgmRunning = false;
+  bgmGeneration++;
+  if (bgmLoopTimer) { clearTimeout(bgmLoopTimer); bgmLoopTimer = null; }
+  bgmNodes.forEach(n => { try { n.stop(); } catch(e){} });
+  bgmNodes = [];
+}
+
+// ── オリジナルBGM（8ビット風ループメロディ）────────────────
 const BGM_BPM = 148;
 const BGM_BEAT = 60 / BGM_BPM;
-// メロディ音符 [周波数, 拍数]
 const MELODY = [
   [659,1],[659,1],[0,1],[659,1],[0,1],[523,1],[659,1],[0,1],
   [784,2],[0,2],[392,2],[0,2],
@@ -757,77 +924,148 @@ const BASS = [
   [131,2],[165,2],[196,2],[220,2],
 ];
 
-function startBGM() {
-  stopBGM();
-  bgmRunning = true;
-  bgmGeneration++;
-  scheduleBGM(bgmGeneration);
-}
+// ── 8ビットアレンジ楽譜（Gメジャー・DKCボーナス風 BPM144）──
+const ARR_BPM  = 144;
+const ARR_BEAT = 60 / ARR_BPM;
 
-// 現在のピッチ倍率（スピードに応じてループごとに更新）
-function getBGMPitch() {
-  const baseSpeed = 2.2;
-  const maxSpeed  = 7.0;
-  const minPitch  = 1.0;
-  const maxPitch  = 1.6;
-  const t = Math.min((speed - baseSpeed) / (maxSpeed - baseSpeed), 1);
-  return minPitch + (maxPitch - minPitch) * t;
-}
-function stopBGM() {
-  bgmRunning = false;
-  bgmGeneration++; // 古い世代のループを無効化
-  if (bgmLoopTimer) { clearTimeout(bgmLoopTimer); bgmLoopTimer = null; }
-  bgmNodes.forEach(n => { try { n.stop(); } catch(e){} });
-  bgmNodes = [];
-}
+// メロディ [Hz, beats]  G major: G=392/784, A=440/880, B=494/988, C=523, D=587, E=659, F#=740
+const ARR_MELODY = [
+  // フレーズA (32拍)
+  [784,1],[659,1],[587,1],[659,1],  // G5 E5 D5 E5
+  [784,2],[0,2],                    // G5-- _
+  [988,1],[880,1],[784,1],[659,1],  // B5 A5 G5 E5
+  [587,4],                          // D5---
+  [587,1],[659,1],[784,1],[880,1],  // D5 E5 G5 A5
+  [988,2],[784,2],                  // B5-- G5--
+  [659,1],[587,1],[494,1],[587,1],  // E5 D5 B4 D5
+  [784,4],                          // G5---
+  // フレーズB (32拍)
+  [880,1],[0,1],[784,1],[0,1],      // A5 _ G5 _
+  [659,2],[784,1],[659,1],          // E5-- G5 E5
+  [587,1],[659,1],[740,1],[784,1],  // D5 E5 F#5 G5
+  [880,4],                          // A5---
+  [784,1],[740,1],[659,1],[587,1],  // G5 F#5 E5 D5
+  [494,2],[587,2],                  // B4-- D5--
+  [440,1],[494,1],[587,1],[659,1],  // A4 B4 D5 E5
+  [784,4],                          // G5---
+];
+
+// ベース（アルペジオ風 triangle）G major
+const ARR_BASS = [
+  // G  G  G  D
+  [98,1],[147,1],[123,1],[147,1],  [98,1],[147,1],[123,1],[147,1],
+  [98,1],[147,1],[123,1],[147,1],  [98,1],[147,1],[123,1],[147,1],
+  // G  Em  Am  D
+  [98,1],[147,1],[123,1],[147,1],  [82,1],[123,1],[110,1],[123,1],
+  [110,1],[165,1],[131,1],[165,1], [98,1],[147,1],[123,1],[147,1],
+  // G  G  D  G
+  [98,1],[147,1],[123,1],[147,1],  [98,1],[147,1],[123,1],[147,1],
+  [98,1],[147,1],[123,1],[147,1],  [98,1],[147,1],[123,1],[147,1],
+  // Am  D  G  G
+  [110,1],[165,1],[131,1],[165,1], [98,1],[147,1],[123,1],[147,1],
+  [98,1],[147,1],[123,1],[147,1],  [98,1],[147,1],[123,1],[147,1],
+];
+
 function scheduleBGM(gen) {
   if (!bgmRunning || gen !== bgmGeneration) return;
   const ac = getAudioCtx();
+  const pitch = getBGMPitch();
+
   const masterGain = ac.createGain();
-  masterGain.gain.setValueAtTime(0.12, ac.currentTime);
+  masterGain.gain.setValueAtTime(0.13, ac.currentTime);
   masterGain.connect(ac.destination);
 
-  // ループ開始時点のピッチで固定（ループ中は変化しない、次ループで更新）
-  const pitch = getBGMPitch();
-  const beatDur = BGM_BEAT / pitch; // ピッチが上がるほどテンポも速く
+  let startT = ac.currentTime + 0.05;
+  let loopDur = 0;
 
-  let t = ac.currentTime + 0.05;
-  const melodyStart = t;
-  for (const [freq, beats] of MELODY) {
-    const dur = beats * beatDur;
-    if (freq > 0) {
-      const osc = ac.createOscillator();
-      const g = ac.createGain();
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(freq * pitch, t);
-      g.gain.setValueAtTime(0.6, t);
-      g.gain.setValueAtTime(0.001, t + dur * 0.85);
-      osc.connect(g); g.connect(masterGain);
-      osc.start(t); osc.stop(t + dur);
-      bgmNodes.push(osc);
+  if (BGM_MODE === 'arranged') {
+    const beat = ARR_BEAT / pitch;
+
+    // メロディ（square）
+    let t = startT;
+    for (const [freq, beats] of ARR_MELODY) {
+      const dur = beats * beat;
+      if (freq > 0) {
+        const osc = ac.createOscillator(); const g = ac.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(freq * pitch, t);
+        g.gain.setValueAtTime(0.52, t);
+        g.gain.setValueAtTime(0.001, t + dur * 0.80);
+        osc.connect(g); g.connect(masterGain);
+        osc.start(t); osc.stop(t + dur);
+        bgmNodes.push(osc);
+      }
+      t += dur;
     }
-    t += dur;
-  }
-  const loopDur = t - melodyStart;
+    loopDur = t - startT;
 
-  let bt = melodyStart;
-  for (const [freq, beats] of BASS) {
-    const dur = beats * beatDur;
-    if (freq > 0) {
-      const osc = ac.createOscillator();
-      const g = ac.createGain();
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(freq * pitch, bt);
-      g.gain.setValueAtTime(0.4, bt);
-      g.gain.setValueAtTime(0.001, bt + dur * 0.9);
-      osc.connect(g); g.connect(masterGain);
-      osc.start(bt); osc.stop(bt + dur);
-      bgmNodes.push(osc);
+    // ベース（triangle・アルペジオ）
+    t = startT;
+    for (const [freq, beats] of ARR_BASS) {
+      const dur = beats * beat;
+      if (freq > 0) {
+        const osc = ac.createOscillator(); const g = ac.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq * pitch, t);
+        g.gain.setValueAtTime(0.35, t);
+        g.gain.setValueAtTime(0.001, t + dur * 0.85);
+        osc.connect(g); g.connect(masterGain);
+        osc.start(t); osc.stop(t + dur);
+        bgmNodes.push(osc);
+      }
+      t += dur;
     }
-    bt += dur;
+
+    // パーカッション — 64拍 / 4拍1小節 = 16小節
+    const drumDst = ac.destination;
+    const totalBars = 16;
+    for (let bar = 0; bar < totalBars; bar++) {
+      for (let b = 0; b < 4; b++) {
+        const bt = startT + (bar * 4 + b) * beat;
+        if (b === 0) scheduleKick(ac, bt, drumDst);           // 表拍キック
+        if (b === 2) scheduleKick(ac, bt, drumDst);           // 裏拍キック
+        if (b === 1 || b === 3) scheduleSnare(ac, bt, drumDst); // スネア
+        scheduleHiHat(ac, bt, drumDst, 0.06);                 // 表ハイハット
+        scheduleHiHat(ac, bt + beat * 0.5, drumDst, 0.04);   // 裏ハイハット
+      }
+    }
+
+  } else {
+    // オリジナルBGM
+    const beatDur = BGM_BEAT / pitch;
+    let t = startT;
+    for (const [freq, beats] of MELODY) {
+      const dur = beats * beatDur;
+      if (freq > 0) {
+        const osc = ac.createOscillator(); const g = ac.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(freq * pitch, t);
+        g.gain.setValueAtTime(0.6, t);
+        g.gain.setValueAtTime(0.001, t + dur * 0.85);
+        osc.connect(g); g.connect(masterGain);
+        osc.start(t); osc.stop(t + dur);
+        bgmNodes.push(osc);
+      }
+      t += dur;
+    }
+    loopDur = t - startT;
+    let bt = startT;
+    for (const [freq, beats] of BASS) {
+      const dur = beats * beatDur;
+      if (freq > 0) {
+        const osc = ac.createOscillator(); const g = ac.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq * pitch, bt);
+        g.gain.setValueAtTime(0.4, bt);
+        g.gain.setValueAtTime(0.001, bt + dur * 0.9);
+        osc.connect(g); g.connect(masterGain);
+        osc.start(bt); osc.stop(bt + dur);
+        bgmNodes.push(osc);
+      }
+      bt += dur;
+    }
   }
 
-  // 世代チェック付きループ（次ループで最新ピッチを適用）
   bgmLoopTimer = setTimeout(() => {
     bgmNodes = [];
     bgmLoopTimer = null;
@@ -889,6 +1127,30 @@ function draw() {
   particles.forEach(p => {
     ctx.fillStyle = p.col;
     ctx.fillRect(p.x|0, p.y|0, 3, 3);
+  });
+
+  // 空気の塊（ボフ）— 楕円で柔らかく膨らんでフェード
+  airPuffs.forEach(p => {
+    const prog = p.t / p.maxT;
+    const alpha = 1 - prog;
+    const rx = 2 + prog * 8;
+    const ry = 1 + prog * 3;
+
+    // 外側（薄め）
+    ctx.globalAlpha = alpha * 0.2;
+    ctx.fillStyle = '#aabbdd';
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, rx + 3, ry + 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 白い核（控えめ）
+    ctx.globalAlpha = alpha * 0.45;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.globalAlpha = 1;
   });
 
   // 猫（hit中はビビり、dead中は全力逃走）
@@ -1361,6 +1623,18 @@ function drawCat() {
   const air = !cat.onGround;
   const blink = (cat.blinkT % 120) < 8;
 
+  // 2段ジャンプスピン（横回転）
+  const spinning = cat.spinT > 0;
+  if (spinning) {
+    const progress = 1 - cat.spinT / 20; // 0→1
+    const scaleX = Math.cos(progress * Math.PI * 3); // 1.5回転
+    const midX = cx + 9;
+    ctx.save();
+    ctx.translate(midX, cy + 9);
+    ctx.scale(scaleX, 1);
+    ctx.translate(-midX, -(cy + 9));
+  }
+
   // 影（地上のみ）
   if (cat.onGround) {
     ctx.fillStyle = 'rgba(0,0,0,0.25)';
@@ -1446,13 +1720,7 @@ function drawCat() {
   ctx.fillRect(cx+5, cy+6, 3, 1);
   ctx.fillRect(cx+13, cy+6, 3, 1);
 
-  // ダブルジャンプエフェクト
-  if (cat.jumps === 2 && !cat.onGround) {
-    ctx.fillStyle = 'rgba(255,150,200,0.5)';
-    ctx.fillRect(cx+2, cy+14, 14, 2);
-    ctx.fillStyle = 'rgba(255,150,200,0.25)';
-    ctx.fillRect(cx, cy+16, 18, 2);
-  }
+  if (spinning) ctx.restore();
 }
 
 // コウモリ
@@ -1891,8 +2159,8 @@ function drawScaredCat() {
 
 function drawUI() {
   // スコア・ベスト（HTML）
-  uiScoreVal.textContent = `SCORE: ${(score|0).toString().padStart(6,'0')}m`;
-  uiBestVal.textContent  = `BEST : ${(bestScore|0).toString().padStart(6,'0')}m`;
+  uiScoreVal.textContent = `SCORE: ${(score|0).toString().padStart(4,'0')}m`;
+  uiBestVal.textContent  = `BEST : ${(bestScore|0).toString().padStart(4,'0')}m`;
 
   // パネル（タイトル / ゲームオーバー）
   if (state === 'title') {
@@ -1920,7 +2188,7 @@ function drawUI() {
       const el = document.getElementById(`ui-rank${i}`);
       const s = topScores[i-1];
       el.style.color = ['#ffff88','#cccccc','#aaaaaa'][i-1];
-      el.textContent = s !== undefined ? `#${i}  ${s.toString().padStart(6,'0')}m` : `#${i}  ------`;
+      el.textContent = s !== undefined ? `#${i}  ${s.toString().padStart(4,'0')}m` : `#${i}  ----`;
     });
     uiPanelHint.textContent = '[ SPACE / TAP ] でリスタート';
     uiPanelHint.className   = 'blink hint';
