@@ -47,9 +47,14 @@
     #info {
       color: #888;
       margin-top: 6px;
-      letter-spacing: 1px;
-      white-space: nowrap;
+      letter-spacing: 0.5px;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      box-sizing: border-box;
+      padding: 0 6px;
     }
+    #info-version  { color: #666; white-space: nowrap; }
     /* UIオーバーレイ：テキストをcanvasの外でクリアに描画 */
     #ui-overlay {
       position: absolute;
@@ -188,9 +193,12 @@
       </div>
       <p  id="ui-panel-hint" class="blink hint"></p>
       <p  id="ui-panel-hint2" style="font-size:0.75em; color:#888; margin-top:4px; pointer-events:auto; cursor:pointer;" onclick="doTitle()"></p>
+      <p  id="ui-panel-controls" style="font-size:0.8em; color:#aaccff; margin-top:8px;"></p>
     </div>
   </div>
-  <div id="info">SPACE / TAP: ジャンプ &nbsp;|&nbsp; 2回でニャンブル！</div>
+  <div id="info">
+    <span id="info-version">v1.0.0</span>
+  </div>
 </div>
 <script>
 const canvas = document.getElementById('c');
@@ -225,7 +233,9 @@ function resize() {
   uiOverlay.style.height = ph + 'px';
   const fs = Math.max(10, Math.floor(13 * currentScale));
   uiOverlay.style.fontSize = fs + 'px';
-  info.style.fontSize = Math.max(10, Math.floor(12 * currentScale)) + 'px';
+  // バージョン表記（右寄せ・フォント上限で巨大化を防ぐ）
+  info.style.width = pw + 'px';
+  info.style.fontSize = Math.min(12, Math.max(9, Math.floor(10 * currentScale))) + 'px';
 }
 window.addEventListener('resize', resize);
 if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
@@ -262,8 +272,10 @@ function reset() {
   state = 'title';
   score = 0; bestScore = bestScore || 0;
   cat = { x: 80, y: 0, vy: 0, onGround: false, jumps: 0, frame: 0, ft: 0, dead: false, deadTimer: 0, blinkT: 0, spinT: 0 };
-  roofs = []; obstacles = []; billboards = []; fireworks = []; fwQueue = []; bats = []; mice = [];
-  scrollX = 0; speed = 2.2; spawnTimer = 0; obstacleTimer = 0; batTimer = 0; mouseTimer = 0;
+  roofs = []; obstacles = []; billboards = []; fireworks = []; fwQueue = []; bats = []; mice = []; fishes = [];
+  scrollX = 0; speed = 2.2; spawnTimer = 0; obstacleTimer = 0; batTimer = 0; mouseTimer = 0; fishTimer = 0;
+  hunger = 0; powerT = 0;          // 体力ゲージ（0〜50、0スタート）・3段ジャンプ残り時間
+  invulnT = 0; growT = 0; catBig = false; // 被弾後無敵・拡大演出・大きい状態フラグ
   hitTimer = 0; angryObstacle = null; lastBillboardMilestone = 0;
   fwFlags = { 1000: false, 1500: false, 2000: false };
   countdownVal = 3; countdownTimer = 0; batSwarmDone = false;
@@ -284,7 +296,13 @@ try {
 } catch(e) {}
 // ベスト3スコア（localStorage保存）
 let topScores = JSON.parse(localStorage.getItem('neko_top3') || '[]');
-let cat, roofs, obstacles, billboards, fireworks, fwQueue, bats, mice, scrollX, speed, spawnTimer, obstacleTimer, batTimer, mouseTimer, particles, airPuffs, tick;
+let cat, roofs, obstacles, billboards, fireworks, fwQueue, bats, mice, fishes, scrollX, speed, spawnTimer, obstacleTimer, batTimer, mouseTimer, fishTimer, particles, airPuffs, tick;
+let hunger, powerT, invulnT, growT, catBig;
+const HUNGER_MAX = 50;     // お魚50個でMAX
+const BIG_THRESHOLD = HUNGER_MAX / 2; // ゲージ50%以上で大きいねこ
+const GROW_DUR = 22;       // 拡大ポップ演出の長さ
+const FISH_VALUE = 1;      // お魚1個の回復量（50個でMAX）
+const POWER_DUR = 180;     // パワー（3段ジャンプ）持続（約3秒＝180tick）
 let hitTimer, angryObstacle, lastBillboardMilestone, fwFlags;
 
 // ── 看板データ ────────────────────────────
@@ -384,8 +402,10 @@ function update(dt) {
 
   if (state === 'hit') {
     hitTimer += dt;
+    // 終盤に後ずさり（逃走へ連続させるため実際にcat.xを動かす）
+    if (angryObstacle && hitTimer > 200) cat.x -= 0.6 * dt;
     // コウモリ衝突は短縮演出（即ビビり→逃走）
-    const hitLimit = angryObstacle ? 160 : 80;
+    const hitLimit = angryObstacle ? 260 : 80;
     if (hitTimer > hitLimit) {
       recordScore();
       state = 'dead';
@@ -474,8 +494,16 @@ function update(dt) {
   spawnTimer -= dt;
   if (spawnTimer <= 0) {
     const last = roofs[roofs.length-1];
-    const gap = 30 + (Math.random()*60)|0;
-    const ny = Math.max(H*0.35, Math.min(H-80, last.y + ((Math.random()-0.5)*80)|0));
+    // 難易度：スコアに応じて隙間の最大値を広げる（前半は優しく、徐々に2段ジャンプ必須に）
+    // 0m: 30〜90px → 3000m以降: 30〜160px（線形に拡大）
+    const diff = Math.min(score / 3000, 1);        // 0→1（3000mで最大）
+    const gapMax = 60 + diff * 40;                 // 60 → 100
+    const gap = 30 + (Math.random() * gapMax)|0;   // 30〜90 → 30〜130
+    // 高低差は500m刻みの段階式：500mまで平坦、以降500mごとに一段ずつ広がる
+    // 500m→ステップ1 … 3000m(ステップ5)で最大±50px
+    const step = Math.max(0, Math.min(Math.floor((score - 500) / 500) + 1, 5)); // 0〜5
+    const hDiff = step * (100 / 5); // 0 → 100（±50px相当）
+    const ny = Math.max(H*0.35, Math.min(H-80, last.y + ((Math.random()-0.5)*hDiff)|0));
     const nw = 120 + (Math.random()*100)|0;
     roofs.push(mkRoof(last.x + last.w + gap, ny, nw));
     spawnTimer = (nw + gap) / speed * 0.8;
@@ -563,10 +591,88 @@ function update(dt) {
     }
   }
 
-  // コウモリとの当たり判定
-  const cx2 = cat.x + 8, cy2 = cat.y + 8;
+  // ── 体力ゲージ：時間経過で減少（緩め）──
+  hunger = Math.max(0, hunger - 0.015 * dt);
+  if (powerT > 0)  powerT  -= dt;
+  if (invulnT > 0) invulnT -= dt;
+  if (growT > 0)   growT   -= dt;
+
+  // ── お魚アイテム：スクロール・取得 ──
+  fishes.forEach(f => { f.x += (f.bobVx - speed) * dt; f.t += 0.12 * dt; });
+  fishes = fishes.filter(f => f.x > -20 && !f.got);
+
+  // お魚スポーン（多めに、序盤から。屋根の上でも空中でもOK＝取れる高さ範囲のみ）
+  fishTimer -= dt;
+  if (fishTimer <= 0) {
+    // 近くの屋根を基準に「取れる高さ帯」を決める（無ければ画面中央付近）
+    const near = roofs.filter(r => r.x > W * 0.4 && r.x < W * 1.6);
+    const refTop = near.length ? Math.min(...near.map(r => r.y)) : H * 0.55;
+
+    const n = 4 + (Math.random() * 5)|0; // 4〜8個
+    const pattern = (Math.random() * 3)|0; // 0:平ら 1:アーチ 2:階段
+    // 基準の高さ：屋根面付近〜ジャンプ到達圏（refTop-4 〜 refTop-46）
+    const baseY = refTop - 4 - (Math.random() * 42)|0;
+    // 開始X：画面右から入ってくる（屋根の上でも隙間の上でもよい）
+    const startX = W + 10 + (Math.random() * 40)|0;
+    for (let i = 0; i < n; i++) {
+      let dy = 0;
+      if (pattern === 1) dy = -Math.round(Math.sin(i/(n-1)*Math.PI) * 20); // 山なり
+      else if (pattern === 2) dy = -i * 5;                                  // 右上がり
+      let fy = baseY + dy;
+      // 取れる範囲にクランプ（高すぎ＝refTop-58、低すぎ＝refTop+8）
+      fy = Math.max(refTop - 58, Math.min(refTop + 8, fy));
+      fishes.push({ x: startX + i*14, baseY: fy, y: fy, t: Math.random()*Math.PI*2, bobVx: 0, got: false });
+    }
+    fishTimer = 24 + (Math.random() * 24)|0; // 短め間隔＝多め
+  }
+
+  // お魚取得判定（猫の体の広めの範囲）
+  const fcx = cat.x + 9, fcy = cat.y + 9;
+  for (const f of fishes) {
+    if (f.got) continue;
+    const fy = f.baseY + Math.sin(f.t) * 2;
+    if (Math.abs(fcx - (f.x + 4)) < 10 && Math.abs(fcy - (fy + 3)) < 11) {
+      f.got = true;
+      hunger = Math.min(HUNGER_MAX, hunger + FISH_VALUE);
+      seFish();
+      // 取得キラッ
+      for (let i = 0; i < 5; i++) {
+        const a = Math.PI*2 * i/5;
+        particles.push({ x: f.x+5, y: fy+4, vx: Math.cos(a)*1.5, vy: Math.sin(a)*1.5-1, life: 14, col: ['#FFEC27','#FFF1E8','#29ADFF'][i%3] });
+      }
+      // MAX到達で3段ジャンプ発動（3秒間・発動中は再発動しない）。発動後ゲージは50%へ
+      if (hunger >= HUNGER_MAX && powerT <= 0) {
+        powerT = POWER_DUR;
+        hunger = BIG_THRESHOLD;
+        seBarrier();
+        for (let i = 0; i < 12; i++) {
+          const a = Math.PI*2 * i/12;
+          particles.push({ x: cat.x+9, y: cat.y+9, vx: Math.cos(a)*3.5, vy: Math.sin(a)*3.5, life: 20, col: ['#FFEC27','#FFF1E8'][i%2] });
+        }
+      }
+    }
+  }
+
+  // 小→大の境目を越えた瞬間：拡大アクション
+  const nowBig = hunger >= BIG_THRESHOLD;
+  if (nowBig && !catBig) {
+    growT = GROW_DUR;
+    seGrow();
+    for (let i = 0; i < 10; i++) {
+      const a = Math.PI*2 * i/10;
+      particles.push({ x: cat.x+9, y: cat.y+10, vx: Math.cos(a)*2.5, vy: Math.sin(a)*2.5, life: 18, col: ['#FFEC27','#FFF1E8','#00E436'][i%3] });
+    }
+  }
+  catBig = nowBig;
+
+  // 小さいねこは当たり判定も小さく（体の下半分のみ）
+  const small = hunger < BIG_THRESHOLD;
+
+  // コウモリとの当たり判定（小さい時は判定点を下げて高い敵をかわせる）
+  const cx2 = cat.x + 8, cy2 = cat.y + (small ? 13 : 8);
   for (const b of bats) {
     if (cx2 > b.x + 2 && cx2 < b.x + 14 && cy2 > b.y + 2 && cy2 < b.y + 10) {
+      if (damageOrSurvive()) continue;
       state = 'hit';
       hitTimer = 0;
       angryObstacle = null; // コウモリ衝突は怒り猫演出なし→そのまま逃走へ
@@ -582,6 +688,7 @@ function update(dt) {
   const mcx = cat.x + 8, mcy = cat.y + 14;
   for (const m of mice) {
     if (mcx > m.x + 1 && mcx < m.x + 11 && mcy > m.y && mcy < m.y + 10) {
+      if (damageOrSurvive()) continue;
       state = 'hit'; hitTimer = 0; angryObstacle = null;
       cat.vy = 0; stopBGM(); seHit();
       setTimeout(() => seScared(), 600);
@@ -590,9 +697,10 @@ function update(dt) {
   }
 
   // 障害物との当たり判定
-  const cx = cat.x + 4, cy = cat.y + 9;
+  const cx = cat.x + 4, cy = cat.y + (small ? 12 : 9);
   for (const o of obstacles) {
     if (cx > o.x + 2 && cx < o.x + 16 && cy > o.y + 2 && cy < o.y + 12) {
+      if (damageOrSurvive()) continue;
       state = 'hit';
       hitTimer = 0;
       angryObstacle = o;
@@ -600,13 +708,19 @@ function update(dt) {
       stopBGM();
       seHit();
       setTimeout(() => seAngry(), 700);
-      setTimeout(() => seScared(), 1400);
+      setTimeout(() => seAngry(), 1800);  // 威嚇を長く見せる間にもう一度シャー
+      setTimeout(() => seScared(), 2600);
       break;
     }
   }
 
   // 猫物理（2段ジャンプ後は重力を弱めてゆっくり落下）
-  const grav = (cat.jumps === 2 && cat.vy > 0) ? 0.25 : 0.5;
+  // 落下重力：3段ジャンプ後はさらに軽く、2段ジャンプ後は軽く
+  let grav = 0.5;
+  if (cat.vy > 0) {
+    if (cat.jumps >= 3) grav = 0.17;
+    else if (cat.jumps === 2) grav = 0.25;
+  }
   cat.vy += grav * dt;
   cat.y += cat.vy * dt;
 
@@ -639,6 +753,24 @@ function update(dt) {
 }
 
 // スコアをベスト・トップ3に反映して保存
+// 敵接触の処理：耐えられたらtrue（ダメージ無効）、falseならゲームオーバーへ
+function damageOrSurvive() {
+  if (invulnT > 0) return true;          // 被弾直後の無敵
+  if (hunger >= BIG_THRESHOLD) {         // 大きいねこ＝1回耐える→ゲージ0＋縮小
+    hunger = 0;
+    powerT = 0;
+    invulnT = 60;
+    catBig = false;
+    seSurvive();
+    for (let i = 0; i < 14; i++) {
+      const a = Math.PI*2 * i/14;
+      particles.push({ x: cat.x+9, y: cat.y+9, vx: Math.cos(a)*3, vy: Math.sin(a)*3, life: 18, col: ['#FF77A8','#FFF1E8'][i%2] });
+    }
+    return true;
+  }
+  return false;
+}
+
 function recordScore() {
   const s = score | 0;
   if (s > bestScore) bestScore = s;
@@ -686,7 +818,9 @@ function jump() {
   if (state === 'title') { reset(); state = 'countdown'; countdownVal = 3; countdownTimer = 0; seCountdown(); return; }
   if (state === 'countdown') return;
   if (state === 'dead') { if (cat.deadTimer > 30) { doRetry(); } return; }
-  if (cat.jumps < 2) {
+  // 通常2段、パワー中は3段ジャンプ可能
+  const maxJumps = powerT > 0 ? 3 : 2;
+  if (cat.jumps < maxJumps) {
     cat.vy = cat.jumps === 0 ? -9 : -7;
     if (cat.jumps === 0) {
       seJump();
@@ -789,6 +923,27 @@ function seGameOver() {
 }
 function seCountdown() {
   beep(660, 0.07, 'square', 0.18);
+}
+function seFish() {
+  // 心地よい取得音（上昇する短い電子音）
+  beep(880, 0.05, 'square', 0.14);
+  beep(1175, 0.06, 'square', 0.14, 0.05);
+}
+function seBarrier() {
+  // バリア消費（守られた）音
+  beep(660, 0.08, 'square', 0.16);
+  beep(990, 0.10, 'square', 0.16, 0.07);
+}
+function seGrow() {
+  // 大きくなる瞬間（パワーアップ上昇音）
+  beep(523, 0.06, 'square', 0.16);
+  beep(659, 0.06, 'square', 0.16, 0.06);
+  beep(880, 0.10, 'square', 0.16, 0.12);
+}
+function seSurvive() {
+  // 被弾を耐えた音（低めから守られた感じ）
+  beep(330, 0.08, 'square', 0.16);
+  beep(494, 0.10, 'square', 0.16, 0.07);
 }
 function seScared() {
   // ビビり音（高音トレモロ）
@@ -1117,13 +1272,16 @@ function draw() {
   // 看板（スコア100ごと）
   billboards.forEach(drawBillboard);
 
+  // お魚アイテム
+  fishes.forEach(drawFish);
+
   // コウモリ
   bats.forEach(drawBat);
   mice.forEach(drawMouse);
 
   // 障害物（寝てる猫 or 怒り猫）
   obstacles.forEach(o => {
-    if (state === 'hit' && o === angryObstacle) drawAngryCat(o);
+    if ((state === 'hit' || state === 'dead') && o === angryObstacle) drawAngryCat(o);
     else drawSleepingCat(o);
   });
 
@@ -1621,11 +1779,37 @@ function drawRoof(r) {
   }
 }
 
+// 4方向キラ星（ドット）
+function drawStar4(x, y, col) {
+  x |= 0; y |= 0;
+  ctx.fillStyle = col;
+  ctx.fillRect(x-1, y, 3, 1);
+  ctx.fillRect(x, y-1, 1, 3);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(x, y, 1, 1);
+}
+
 function drawCat() {
   const cx = cat.x|0, cy = cat.y|0;
   const f = cat.frame;
   const air = !cat.onGround;
   const blink = (cat.blinkT % 120) < 8;
+
+  // ── 体のサイズ（小=0.5／大=1.0）＋拡大ポップ＋被弾無敵の点滅 ──
+  let bodyScale = (hunger >= BIG_THRESHOLD) ? 1.0 : 0.5;
+  if (growT > 0) {
+    const p = 1 - growT / GROW_DUR; // 0→1
+    bodyScale = p < 0.7 ? (0.5 + (1.15 - 0.5) * (p / 0.7))
+                        : (1.15 - 0.15 * ((p - 0.7) / 0.3)); // 0.5→1.15→1.0
+  }
+  ctx.save(); // マスター変換
+  if (invulnT > 0 && (Math.floor(tick/4) % 2 === 0)) ctx.globalAlpha = 0.4; // 点滅
+  if (bodyScale !== 1.0) {
+    const footX = cx + 9, footY = cy + 18; // 足元を基準に拡縮
+    ctx.translate(footX, footY);
+    ctx.scale(bodyScale, bodyScale);
+    ctx.translate(-footX, -footY);
+  }
 
   // 2段ジャンプスピン（横回転）
   const spinning = cat.spinT > 0;
@@ -1643,6 +1827,24 @@ function drawCat() {
   if (cat.onGround) {
     ctx.fillStyle = 'rgba(0,0,0,0.25)';
     ctx.fillRect(cx+2, cy+17, 14, 2);
+  }
+
+  // ── バリア中：キラキラ演出（金色オーラ＋回転する星）──
+  if (powerT > 0) {
+    const auraPulse = 0.3 + 0.2*Math.sin(tick*0.18);
+    ctx.globalAlpha = auraPulse;
+    ctx.fillStyle = '#FFEC27';
+    ctx.beginPath();
+    ctx.ellipse(cx+9, cy+9, 14, 14, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    // 周囲を回る星3つ
+    for (let i = 0; i < 3; i++) {
+      const a = tick*0.08 + i * (Math.PI*2/3);
+      const sx = cx+9 + Math.cos(a)*15;
+      const sy = cy+9 + Math.sin(a)*11;
+      drawStar4(sx, sy, (Math.sin(tick*0.3+i)>0) ? '#FFF1E8' : '#FFEC27');
+    }
   }
 
   // しっぽ（しましま）
@@ -1725,9 +1927,40 @@ function drawCat() {
   ctx.fillRect(cx+13, cy+6, 3, 1);
 
   if (spinning) ctx.restore();
+  ctx.restore(); // マスター変換
+  ctx.globalAlpha = 1;
 }
 
 // コウモリ
+// お魚アイテム（ドット絵・ふわふわ上下＋キラッ・一回り小さめ）
+function drawFish(f) {
+  const fx = f.x|0;
+  const fy = (f.baseY + Math.sin(f.t) * 2)|0;
+  // 後光（薄く点滅・控えめ）
+  const glow = 0.2 + 0.15*Math.sin(f.t*2);
+  ctx.globalAlpha = glow;
+  ctx.fillStyle = '#FFEC27';
+  ctx.beginPath();
+  ctx.ellipse(fx+4, fy+3, 5, 4, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  // 体（水色）
+  ctx.fillStyle = '#29ADFF';
+  ctx.fillRect(fx+2, fy+2, 4, 3);
+  ctx.fillRect(fx+3, fy+1, 3, 5);
+  // 尾びれ
+  ctx.fillStyle = '#1D9BE0';
+  ctx.fillRect(fx,   fy+1, 2, 1);
+  ctx.fillRect(fx,   fy+4, 2, 1);
+  ctx.fillRect(fx+1, fy+2, 1, 2);
+  // 目
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(fx+5, fy+3, 1, 1);
+  // ハイライト
+  ctx.fillStyle = '#FFF1E8';
+  ctx.fillRect(fx+3, fy+2, 1, 1);
+}
+
 function drawBat(b) {
   const bx = b.x|0;
   const by = b.y|0;
@@ -2093,10 +2326,9 @@ function drawAngryCat(o) {
 // ビビり猫（白猫が怯える）
 function drawScaredCat() {
   const phase = hitTimer;
-  // フェーズ3(110-160)以降は後退
-  const retreatX = phase > 110 ? (phase - 110) * 0.4 : 0;
+  // 後ずさりはupdate側でcat.xを動かしているのでそのまま使う（逃走へ連続）
   const shake = phase > 40 ? (((tick*1.2)|0) % 2 === 0 ? -1 : 1) : 0;
-  const cx = (cat.x - retreatX + shake)|0;
+  const cx = (cat.x + shake)|0;
   const cy = cat.y|0;
 
   // 影
@@ -2155,9 +2387,48 @@ function drawScaredCat() {
     }
   }
 
-  // ビビり吹き出し
-  if (phase > 40 && phase < 110) {
+  // ビビり吹き出し（威嚇が続く間ずっと）
+  if (phase > 40 && phase < 210) {
     pixelText('ひぃ！', cx+16, cy-10, '#ffffff', 1);
+  }
+}
+
+// 体力ゲージ（魚マーク＋バー）画面下中央
+function drawHungerGauge() {
+  const barW = 90, barH = 7;
+  const bx = (W - barW) / 2, by = H - 14;
+  const full = powerT > 0;
+  const pulse = full ? (0.6 + 0.4*Math.sin(tick*0.2)) : 1;
+
+  // 枠
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(bx-2, by-2, barW+4, barH+4);
+  ctx.fillStyle = '#222233';
+  ctx.fillRect(bx, by, barW, barH);
+  // 中身（3段ジャンプ中は残り時間ゲージ＝金、通常は体力ゲージ）
+  const big = hunger >= BIG_THRESHOLD;
+  const ratio = full ? (powerT / POWER_DUR) : (hunger / HUNGER_MAX);
+  const w = ratio * barW;
+  ctx.fillStyle = full ? '#FFEC27' : (big ? '#00E436' : '#FF9933');
+  ctx.globalAlpha = pulse;
+  ctx.fillRect(bx, by, w, barH);
+  ctx.globalAlpha = 1;
+  // 50%マーカー（大きくなる境目）
+  const mx = bx + barW * (BIG_THRESHOLD / HUNGER_MAX);
+  ctx.fillStyle = '#FFF1E8';
+  ctx.fillRect(mx|0, by-1, 1, barH+2);
+  // 魚アイコン（左）
+  ctx.fillStyle = '#29ADFF';
+  ctx.fillRect(bx-12, by+1, 5, 4);
+  ctx.fillRect(bx-13, by, 1, 2);
+  ctx.fillRect(bx-13, by+4, 1, 2);
+  // 3段ジャンプ中ラベル（残り秒数）
+  if (full) {
+    ctx.fillStyle = '#FFEC27';
+    ctx.font = 'bold 7px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('3 JUMP ' + Math.ceil(powerT / 60) + 's', W/2, by-5);
+    ctx.textAlign = 'left';
   }
 }
 
@@ -2174,6 +2445,7 @@ function drawUI() {
     uiPanelSub.textContent  = '屋根の上を駆け抜けろ！';
     uiPanelSub2.textContent = '';
     document.getElementById('ui-ranking').style.display = 'none';
+    document.getElementById('ui-panel-controls').textContent = 'SPACE / TAP でジャンプ!';
     uiPanelHint.textContent = '[ SPACE / TAP ] でスタート';
     uiPanelHint.className   = 'blink hint';
     document.getElementById('ui-panel-hint2').textContent = '';
@@ -2197,8 +2469,14 @@ function drawUI() {
     uiPanelHint.textContent = '[ SPACE / TAP ] でリスタート';
     uiPanelHint.className   = 'blink hint';
     document.getElementById('ui-panel-hint2').textContent = '▶ タイトルへ戻る';
+    document.getElementById('ui-panel-controls').textContent = '';
   } else {
     uiPanel.style.display = 'none';
+  }
+
+  // 体力ゲージ（プレイ中・カウントダウン中・ヒット中に表示）
+  if (state === 'play' || state === 'countdown' || state === 'hit') {
+    drawHungerGauge();
   }
 
   // カウントダウン表示
