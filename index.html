@@ -277,6 +277,11 @@ function reset() {
 }
 
 let score = 0, bestScore = 0;
+// 保存済みベスト3から最高スコアを復元
+try {
+  const saved = JSON.parse(localStorage.getItem('neko_top3') || '[]');
+  if (saved.length) bestScore = Math.max(...saved);
+} catch(e) {}
 // ベスト3スコア（localStorage保存）
 let topScores = JSON.parse(localStorage.getItem('neko_top3') || '[]');
 let cat, roofs, obstacles, billboards, fireworks, fwQueue, bats, mice, scrollX, speed, spawnTimer, obstacleTimer, batTimer, mouseTimer, particles, airPuffs, tick;
@@ -382,12 +387,7 @@ function update(dt) {
     // コウモリ衝突は短縮演出（即ビビり→逃走）
     const hitLimit = angryObstacle ? 160 : 80;
     if (hitTimer > hitLimit) {
-      const s = score | 0;
-      if (s > bestScore) bestScore = s;
-      topScores.push(s);
-      topScores.sort((a, b) => b - a);
-      topScores = topScores.slice(0, 3);
-      localStorage.setItem('neko_top3', JSON.stringify(topScores));
+      recordScore();
       state = 'dead';
       cat.dead = true;
       cat.deadTimer = 0;
@@ -638,17 +638,21 @@ function update(dt) {
   // チャリ走風に左スクロールなので猫は固定X
 }
 
-function die() {
-  if (state === 'dead' || state === 'hit') return;
-  state = 'dead';
-  cat.dead = true;
+// スコアをベスト・トップ3に反映して保存
+function recordScore() {
   const s = score | 0;
   if (s > bestScore) bestScore = s;
-  // トップ3更新
   topScores.push(s);
   topScores.sort((a, b) => b - a);
   topScores = topScores.slice(0, 3);
   localStorage.setItem('neko_top3', JSON.stringify(topScores));
+}
+
+function die() {
+  if (state === 'dead' || state === 'hit') return;
+  state = 'dead';
+  cat.dead = true;
+  recordScore();
   spawnParticles(cat.x + 8, cat.y + 8);
   stopBGM();
   seGameOver();
