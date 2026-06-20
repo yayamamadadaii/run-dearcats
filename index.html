@@ -70,6 +70,7 @@
     }
     #ui-score .label { color: #ffff00; }
     #ui-score .best  { color: #aaaaaa; }
+    #ui-score .fish  { color: #29ADFF; }
     #ui-panel {
       position: absolute;
       top: 50%; left: 50%;
@@ -283,6 +284,9 @@ function reset() {
   hunger = 0; powerT = 0;          // 体力ゲージ（0〜50、0スタート）・3段ジャンプ残り時間
   invulnT = 0; growT = 0; catBig = false; // 被弾後無敵・拡大演出・大きい状態フラグ
   coyoteT = 0; jumpBufferT = 0;    // コヨーテタイム・ジャンプ先行入力
+  goalState = 0; goalCafe = null; goalFlowers = []; goalRunRoof = null; // ゴール状態
+  fishCount = 0;                   // 取ったお魚の数
+  if (cat) cat.enterFade = 0;
   hitTimer = 0; angryObstacle = null; lastBillboardMilestone = 0;
   fwFlags = { 1000: false, 1500: false, 2000: false };
   countdownVal = 3; countdownTimer = 0; batSwarmDone = false;
@@ -308,6 +312,11 @@ let hunger, powerT, invulnT, growT, catBig;
 let coyoteT, jumpBufferT;
 const COYOTE_FRAMES = 7;      // 屋根を踏み外した後もジャンプ可な猶予
 const JUMP_BUFFER_FRAMES = 9; // 着地前のジャンプ入力を先行受付する猶予
+// ── ゴール（保護猫カフェ到着）──
+let goalState, goalCafe, goalFlowers = [], goalFwTimer = 0, goalRunRoof = null; // 0:未到達 1:接近中 2:入店 3:花火 4:クリア画面
+let fishCount = 0; // 取ったお魚の数
+const GOAL_ENABLED = true;
+const GOAL_DIST = 2500;       // ゴール距離
 const HUNGER_MAX = 50;     // お魚50個でMAX
 const BIG_THRESHOLD = HUNGER_MAX / 2; // ゲージ50%以上で大きいねこ
 const GROW_DUR = 22;       // 拡大ポップ演出の長さ
@@ -440,8 +449,71 @@ function update(dt) {
 
   if (state !== 'play') return;
 
-  // スコア3000でコウモリ大群
-  if (score >= 3000 && !batSwarmDone) {
+  // ゴール入店アニメ／花火演出／クリア画面（世界は停止、花火だけ動かす）
+  if (goalState >= 2) {
+    cat.blinkT += dt;
+    updateFireworks(dt);
+    goalFlowers.forEach(f => f.sway += dt);
+    if (goalState === 2) {
+      // 入店アニメ：中央のドアへ歩く→フェードして入る
+      cat.ft += dt;
+      if (cat.ft > 6) { cat.frame = (cat.frame + 1) % 4; cat.ft = 0; }
+      const doorX = goalCafe.x + 22;
+      if (cat.x < doorX) {
+        cat.x += 1.1 * dt;
+      } else {
+        cat.enterFade = (cat.enterFade || 0) + dt;
+        if (cat.enterFade > 22) {
+          goalState = 3;            // 入店完了→花火タイム
+          recordScore();
+          seGoal();                 // 盛大なファンファーレ
+          goalFwTimer = 0;
+        }
+      }
+    } else if (goalState === 3) {
+      // タップするまで花火を上げ続ける
+      goalFwTimer -= dt;
+      if (goalFwTimer <= 0) {
+        spawnBurst('goal');
+        goalFwTimer = 14 + Math.random() * 16;
+      }
+    }
+    return;
+  }
+
+  // ゴール接近トリガー：到達したら長い平らな道を敷いてカフェ＆両側花道を配置
+  if (GOAL_ENABLED && goalState === 0 && score >= GOAL_DIST) {
+    goalState = 1;
+    const last = roofs[roofs.length - 1];
+    const runW = 1400;
+    const runRoof = mkRoof(last.x + last.w + 40, last.y, runW);
+    roofs.push(runRoof);
+    goalRunRoof = runRoof;
+    goalCafe = { x: runRoof.x + 380, y: last.y }; // 道の途中にカフェ
+    // お花で道を飾る（カフェの足元を避けて道全体に・両側）
+    goalFlowers = [];
+    for (let fx = runRoof.x + 20; fx < runRoof.x + runW - 20; fx += 26) {
+      if (fx > goalCafe.x - 8 && fx < goalCafe.x + 80) continue; // カフェ足元は飛ばす
+      const col = ['#FF77A8','#FFEC27','#FFF1E8','#FF9AD5'][(Math.random()*4)|0];
+      goalFlowers.push({ x: fx, y: runRoof.y, col, sway: Math.random()*Math.PI*2 });
+    }
+  }
+
+  // ゴール接近中：花道（runRoof）が画面に入ってから減速＝ゴールモード本番
+  if (goalState === 1 && goalCafe) {
+    if (goalRunRoof && goalRunRoof.x <= cat.x) speed = 1.2; // 花道に乗ったらゆっくり（落とし穴を抜けた後）
+    const targetX = Math.round(W / 2 - 36); // 画面中央にカフェ
+    goalCafe.x -= speed * dt;
+    goalFlowers.forEach(f => f.x -= speed * dt);
+    if (goalCafe.x <= targetX) {
+      goalCafe.x = targetX;
+      goalState = 2;
+      stopBGM();
+    }
+  }
+
+  // スコア3000でコウモリ大群（ゴール無効時のみ）
+  if (!GOAL_ENABLED && score >= 3000 && !batSwarmDone) {
     batSwarmDone = true;
     for (let i = 0; i < 50; i++) {
       setTimeout(() => {
@@ -451,31 +523,15 @@ function update(dt) {
     }
   }
 
-  // スコア・速度
-  score += dt * 0.4;
-  speed = 2.2 + score * 0.002;
+  // スコア・速度（ゴール接近中はスコア停止・速度は1.2固定）
+  if (goalState === 0) { score += dt * 0.4; speed = 2.2 + score * 0.002; }
 
   // 看板スクロール・削除
   billboards.forEach(b => b.x -= speed * dt);
   billboards = billboards.filter(b => b.x > -120);
 
-  // 花火キュー処理（時間差爆発）
-  if (fwQueue && fwQueue.length > 0) {
-    fwQueue.forEach(q => q.delay -= dt);
-    const ready = fwQueue.filter(q => q.delay <= 0);
-    fwQueue = fwQueue.filter(q => q.delay > 0);
-    ready.forEach(q => spawnBurst(q.size));
-  }
-
-  // 花火パーティクル更新
-  fireworks.forEach(p => {
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    p.vy += 0.04 * dt; // ゆっくり落下
-    p.life -= dt;
-    p.alpha = Math.max(0, p.life / p.maxLife);
-  });
-  fireworks = fireworks.filter(p => p.life > 0);
+  // 花火（キュー＋パーティクル）更新
+  updateFireworks(dt);
 
   // スコアマイルストーンで花火発射
   if (score >= 1000 && !fwFlags[1000]) { fwFlags[1000] = true; launchFirework('small');  }
@@ -484,7 +540,7 @@ function update(dt) {
 
   // スコア100ごとに看板スポーン
   const milestone = Math.floor(score / 300);
-  if (milestone > lastBillboardMilestone && score > 0) {
+  if (milestone > lastBillboardMilestone && score > 0 && goalState === 0) {
     lastBillboardMilestone = milestone;
     // 看板サイズ
     const boardW = 100;
@@ -500,9 +556,9 @@ function update(dt) {
   // スクロール
   roofs.forEach(r => r.x -= speed * dt);
 
-  // スポーン
+  // スポーン（ゴール接近後は新しい屋根を出さない）
   spawnTimer -= dt;
-  if (spawnTimer <= 0) {
+  if (spawnTimer <= 0 && goalState === 0) {
     const last = roofs[roofs.length-1];
     // 難易度：スコアに応じて隙間の最大値を広げる（前半は優しく、徐々に2段ジャンプ必須に）
     // 0m: 30〜90px → 3000m以降: 30〜160px（線形に拡大）
@@ -528,7 +584,7 @@ function update(dt) {
 
   // 障害物スポーン（屋根の上にランダム配置）
   obstacleTimer -= dt;
-  if (obstacleTimer <= 0 && score > 20) {
+  if (obstacleTimer <= 0 && score > 20 && goalState === 0) {
     // 画面右端付近の屋根を探す
     const candidates = roofs.filter(r => r.x > W * 0.7 && r.x < W * 1.5 && r.w > 60);
     if (candidates.length > 0) {
@@ -549,7 +605,7 @@ function update(dt) {
   bats = bats.filter(b => b.x > -30);
 
   // スコア1500以上でスポーン
-  if (score > 1500) {
+  if (score > 1500 && goalState === 0) {
     batTimer -= dt;
     if (batTimer <= 0) {
       // 猫が走る高さ付近（屋根の少し上）でランダムな高さ
@@ -577,7 +633,7 @@ function update(dt) {
   mice = mice.filter(m => m.x + 14 > -10 && m.x < W + 20);
 
   // スコア1000以上でスポーン（出現率低め）
-  if (score > 1000) {
+  if (score > 1000 && goalState === 0) {
     mouseTimer -= dt;
     if (mouseTimer <= 0) {
       // 画面外右側の屋根を探す
@@ -613,7 +669,7 @@ function update(dt) {
 
   // お魚スポーン（多めに、序盤から。屋根の上でも空中でもOK＝取れる高さ範囲のみ）
   fishTimer -= dt;
-  if (fishTimer <= 0) {
+  if (fishTimer <= 0 && goalState === 0) {
     // 近くの屋根を基準に「取れる高さ帯」を決める（無ければ画面中央付近）
     const near = roofs.filter(r => r.x > W * 0.4 && r.x < W * 1.6);
     const refTop = near.length ? Math.min(...near.map(r => r.y)) : H * 0.55;
@@ -644,6 +700,7 @@ function update(dt) {
     if (Math.abs(fcx - (f.x + 4)) < 10 && Math.abs(fcy - (fy + 3)) < 11) {
       f.got = true;
       hunger = Math.min(HUNGER_MAX, hunger + FISH_VALUE);
+      fishCount++;
       seFish();
       // 取得キラッ
       for (let i = 0; i < 5; i++) {
@@ -871,6 +928,9 @@ function jump() {
   if (state === 'title') { reset(); state = 'countdown'; countdownVal = 3; countdownTimer = 0; seCountdown(); return; }
   if (state === 'countdown') return;
   if (state === 'dead') { if (cat.deadTimer > 30) { doRetry(); } return; }
+  if (goalState === 4) { doRetry(); return; }     // クリア画面→もう一度
+  if (goalState === 3) { goalState = 4; return; } // 花火中にタップ→クリア画面へ
+  if (goalState === 2) return;                    // 入店アニメ中は入力無視
   if (state !== 'play') return;
   // 通常2段、パワー中は3段ジャンプ可能
   const maxJumps = powerT > 0 ? 3 : 2;
@@ -979,6 +1039,20 @@ function seGameOver() {
 }
 function seCountdown() {
   beep(660, 0.07, 'square', 0.18);
+}
+function seGoal() {
+  // 盛大な到着ファンファーレ（メロディ＋ハモ리＋ベース）
+  const mel = [
+    [523,0.14,0.00],[523,0.10,0.14],[523,0.10,0.24],[659,0.30,0.34],
+    [587,0.14,0.66],[659,0.14,0.80],[784,0.36,0.96],
+    [1047,0.50,1.36],[784,0.50,1.36]
+  ];
+  mel.forEach(([f,d,t]) => beep(f, d, 'square', 0.18, t));
+  // ハモリ（3度下）
+  [[392,0.34],[523,0.96],[659,1.36]].forEach(([f,t]) => beep(f, 0.4, 'triangle', 0.10, t));
+  // ベース＆きらめき
+  beep(262, 0.5, 'triangle', 0.14, 1.36);
+  [1568,1318,1047,1318].forEach((f,i) => beep(f, 0.10, 'square', 0.08, 1.9 + i*0.10));
 }
 function seFish() {
   // 心地よい取得音（上昇する短い電子音）
@@ -1326,6 +1400,10 @@ function draw() {
   // 屋根
   roofs.forEach(drawRoof);
 
+  // ゴールの道のお花＆保護猫カフェ
+  goalFlowers.forEach(drawFlower);
+  if (goalCafe) drawCafe(goalCafe);
+
   // 看板（スコア100ごと）
   billboards.forEach(drawBillboard);
 
@@ -1375,6 +1453,7 @@ function draw() {
   // 猫（hit中はビビり、dead中は全力逃走）
   if (state === 'hit') drawScaredCat();
   else if (state === 'dead') drawRunningAwayCat();
+  else if (goalState >= 3) { /* 猫は店内（非表示） */ }
   else drawCat();
 
   // UI
@@ -1391,35 +1470,56 @@ const FW_COLORS = [
   ['#ff8844','#ffbb88','#ffddcc'],
 ];
 
-function launchFirework(size) {
-  const counts  = { small: 5, medium: 10, large: 15 };
-  const nums    = { small: 16, medium: 24, large: 36 };
-  const radii   = { small: 18, medium: 30, large: 48 };
-  const lives   = { small: 40, medium: 55, large: 75 };
+function updateFireworks(dt) {
+  // キュー処理（時間差爆発）
+  if (fwQueue && fwQueue.length > 0) {
+    fwQueue.forEach(q => q.delay -= dt);
+    const ready = fwQueue.filter(q => q.delay <= 0);
+    fwQueue = fwQueue.filter(q => q.delay > 0);
+    ready.forEach(q => spawnBurst(q.size));
+  }
+  // パーティクル更新
+  fireworks.forEach(p => {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 0.04 * dt;
+    p.life -= dt;
+    p.alpha = Math.max(0, p.life / p.maxLife);
+  });
+  fireworks = fireworks.filter(p => p.life > 0);
+}
 
+function launchFirework(size) {
+  const counts  = { small: 5, medium: 10, large: 15, goal: 36 };
   const bursts = counts[size];
   // 時間差で順番に打ち上げるためのキュー
   if (!fwQueue) fwQueue = [];
+  const spacing = size === 'goal' ? 10 : 18; // ゴールは密に連発
   for (let b = 0; b < bursts; b++) {
-    fwQueue.push({ size, delay: b * 18 }); // 18フレームずつずらす
+    fwQueue.push({ size, delay: b * spacing });
   }
 
   // 花火 SE（最初の1発だけ）
-  seFirework(size);
+  seFirework(size === 'goal' ? 'large' : size);
+}
+
+// ゴールの盛大な花火（large より多く・大きく・連続）
+function launchGoalFireworks() {
+  launchFirework('goal');
 }
 
 function spawnBurst(size) {
-  const nums  = { small: 16, medium: 24, large: 36 };
-  const radii = { small: 18, medium: 30, large: 48 };
-  const lives = { small: 40, medium: 55, large: 75 };
+  const nums  = { small: 16, medium: 24, large: 36, goal: 52 };
+  const radii = { small: 18, medium: 30, large: 48, goal: 66 };
+  const lives = { small: 40, medium: 55, large: 75, goal: 95 };
 
-  const cx = 40 + Math.random() * (W - 80);
-  const cy = 18 + Math.random() * (H * 0.38);
+  const cx = 30 + Math.random() * (W - 60);
+  const cy = 14 + Math.random() * (H * 0.42);
   const cols = FW_COLORS[(Math.random() * FW_COLORS.length)|0];
   const n = nums[size];
   const r = radii[size];
   const life = lives[size];
-  const pSize = size === 'large' ? 2 : 1;
+  const pSize = (size === 'large' || size === 'goal') ? 2 : 1;
 
   for (let i = 0; i < n; i++) {
     const angle = (Math.PI * 2 * i / n) + (Math.random() - 0.5) * 0.3;
@@ -1692,6 +1792,108 @@ function drawSkyline() {
   });
 }
 
+// ゴールの保護猫カフェ
+function drawCafe(c) {
+  const bx = c.x | 0;
+  const gy = c.y | 0;          // 屋根面（建物の底）
+  const top = gy - 50;         // 壁の上端
+
+  // 温かいグロー（背景）
+  ctx.globalAlpha = 0.22 + 0.06 * Math.sin(tick * 0.1);
+  ctx.fillStyle = '#FFEC27';
+  ctx.beginPath();
+  ctx.ellipse(bx + 36, gy - 26, 56, 50, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // 壁
+  ctx.fillStyle = '#E8D8B0';
+  ctx.fillRect(bx, top, 72, 50);
+  // 壁の下の土台
+  ctx.fillStyle = '#7E5A3A';
+  ctx.fillRect(bx, gy - 6, 72, 6);
+
+  // 屋根（赤い三角）
+  ctx.fillStyle = '#C0563C';
+  ctx.beginPath();
+  ctx.moveTo(bx - 6, top);
+  ctx.lineTo(bx + 36, top - 18);
+  ctx.lineTo(bx + 78, top);
+  ctx.closePath();
+  ctx.fill();
+  // 屋根のふち（濃い）
+  ctx.fillStyle = '#8E3A28';
+  ctx.fillRect(bx - 6, top, 84, 3);
+
+  // 三角屋根の肉球マーク
+  ctx.fillStyle = '#FFF1E8';
+  ctx.fillRect(bx + 34, top - 11, 4, 3);
+  ctx.fillRect(bx + 32, top - 9, 2, 2);
+  ctx.fillRect(bx + 38, top - 9, 2, 2);
+  ctx.fillRect(bx + 35, top - 13, 2, 2);
+
+  // 窓（左右・暖色＋ねこのシルエット）
+  const drawWin = (wx) => {
+    ctx.fillStyle = '#FFE08A';
+    ctx.fillRect(wx, top + 10, 16, 13);
+    ctx.fillStyle = '#9A6B3A';
+    ctx.fillRect(wx - 1, top + 9, 18, 1);
+    ctx.fillRect(wx + 7, top + 10, 1, 13); // 桟
+    // ねこのシルエット（座り）
+    ctx.fillStyle = '#3a2a1a';
+    ctx.fillRect(wx + 3, top + 18, 4, 4);
+    ctx.fillRect(wx + 3, top + 16, 1, 2); // 耳
+    ctx.fillRect(wx + 6, top + 16, 1, 2);
+    ctx.fillRect(wx + 10, top + 19, 4, 3);
+    ctx.fillRect(wx + 10, top + 17, 1, 2);
+    ctx.fillRect(wx + 13, top + 17, 1, 2);
+  };
+  drawWin(bx + 6);
+  drawWin(bx + 50);
+
+  // 扉（中央・暖かい光）
+  ctx.fillStyle = '#5A3A22';
+  ctx.fillRect(bx + 29, gy - 26, 16, 26);
+  ctx.fillStyle = '#FFD86B';
+  ctx.fillRect(bx + 31, gy - 23, 12, 21); // 光
+  ctx.fillStyle = '#5A3A22';
+  ctx.fillRect(bx + 37, gy - 16, 2, 6);   // ドアノブ側仕切り
+  // ドア前のマット
+  ctx.fillStyle = '#C0563C';
+  ctx.fillRect(bx + 26, gy - 3, 22, 3);
+
+  // 看板「保護猫カフェ」
+  ctx.fillStyle = '#3A2A1A';
+  ctx.fillRect(bx + 10, top + 1, 52, 9);
+  ctx.fillStyle = '#FFEC27';
+  ctx.font = 'bold 6px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('拝啓ねこ様', bx + 36, top + 8);
+  ctx.textAlign = 'left';
+}
+
+// ゴールの道のお花
+function drawFlower(f) {
+  const fx = f.x | 0;
+  const fy = (f.y - 2) | 0;
+  const sway = Math.sin(f.sway) * 1;
+  // 茎
+  ctx.fillStyle = '#3FA34D';
+  ctx.fillRect(fx + 2, fy - 4, 1, 5);
+  // 葉
+  ctx.fillStyle = '#5FC76B';
+  ctx.fillRect(fx, fy - 2, 2, 1);
+  // 花びら（4枚）＋中心
+  const px = fx + 2 + sway, py = fy - 6;
+  ctx.fillStyle = f.col;
+  ctx.fillRect(px - 1, py, 1, 2);
+  ctx.fillRect(px + 1, py, 1, 2);
+  ctx.fillRect(px, py - 1, 2, 1);
+  ctx.fillRect(px, py + 1, 2, 1);
+  ctx.fillStyle = '#FFEC27';
+  ctx.fillRect(px, py, 1, 1);
+}
+
 function drawRoof(r) {
   const { x, y, w, h, style, winCols, hasChimney, chimneyX, winSeeds, winTypes, signs } = r;
   const col1 = [PAL.roof1, PAL.wall1, '#3a2a4a'][style % 3];
@@ -1861,6 +2063,7 @@ function drawCat() {
   }
   ctx.save(); // マスター変換
   if (invulnT > 0 && (Math.floor(tick/4) % 2 === 0)) ctx.globalAlpha = 0.4; // 点滅
+  if (cat.enterFade > 0) ctx.globalAlpha = Math.max(0, 1 - cat.enterFade / 22); // 入店フェード
   if (bodyScale !== 1.0) {
     const footX = cx + 9, footY = cy + 18; // 足元を基準に拡縮
     ctx.translate(footX, footY);
@@ -2527,12 +2730,34 @@ function drawUI() {
     uiPanelHint.className   = 'blink hint';
     document.getElementById('ui-panel-hint2').textContent = '▶ タイトルへ戻る';
     document.getElementById('ui-panel-controls').textContent = '';
+  } else if (goalState === 4) {
+    uiPanel.style.display = 'block';
+    uiPanelTitle.style.color = '#FFEC27';
+    uiPanelTitle.textContent = 'おかえり!!';
+    uiPanelSub.className  = 'gameover-score';
+    uiPanelSub.textContent = '拝啓ねこ様に到着！';
+    uiPanelSub2.textContent = `SCORE: ${(score|0)}m  /  FISH: ${fishCount}`;
+    uiPanelSub2.style.color = '#aaffaa';
+    document.getElementById('ui-ranking').style.display = 'none';
+    uiPanelHint.textContent = '[ SPACE / TAP ] でもう一度';
+    uiPanelHint.className   = 'blink hint';
+    document.getElementById('ui-panel-hint2').textContent = '▶ タイトルへ戻る';
+    document.getElementById('ui-panel-controls').textContent = '';
   } else {
     uiPanel.style.display = 'none';
   }
 
-  // 体力ゲージ（プレイ中・カウントダウン中・ヒット中に表示）
-  if (state === 'play' || state === 'countdown' || state === 'hit') {
+  // 花火タイム中：タップ案内（キャンバスに点滅表示）
+  if (goalState === 3 && (Math.floor(tick / 18) % 2 === 0)) {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('TAP でクリア', W / 2, H - 18);
+    ctx.textAlign = 'left';
+  }
+
+  // 体力ゲージ（プレイ中・カウントダウン中・ヒット中に表示。ゴール中は隠す）
+  if ((state === 'play' || state === 'countdown' || state === 'hit') && goalState === 0) {
     drawHungerGauge();
   }
 
