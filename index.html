@@ -71,6 +71,13 @@
     #ui-score .label { color: #ffff00; }
     #ui-score .best  { color: #aaaaaa; }
     #ui-score .fish  { color: #29ADFF; }
+    #ui-mode-val {
+      position: absolute;
+      top: 6%; right: 3%;
+      font-weight: bold;
+      text-align: right;
+      font-size: 0.5em;
+    }
     #ui-panel {
       position: absolute;
       top: 50%; left: 50%;
@@ -188,9 +195,11 @@
       <div class="label" id="ui-score-val">SCORE: 000000</div>
       <div class="best"  id="ui-best-val" >BEST : 000000</div>
     </div>
+    <div id="ui-mode-val"></div>
     <div id="ui-panel">
       <h1 id="ui-panel-title"></h1>
       <p  id="ui-panel-sub"></p>
+      <p  id="ui-panel-mode" style="display:none; pointer-events:auto; cursor:pointer; font-weight:bold; margin:8px 0;" onclick="toggleMode()"></p>
       <p  id="ui-panel-sub2"></p>
       <div id="ui-ranking" style="display:none; margin: 6px 0;">
         <p style="color:#aaa; font-size:0.75em; margin-bottom:4px;">── BEST SCORES ──</p>
@@ -204,13 +213,15 @@
     </div>
   </div>
   <div id="info">
-    <span id="info-version">v1.2.0</span>
+    <span id="info-version">v1.3.0</span>
   </div>
 </div>
 <script>
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const W = 400, H = 240;
+// ゲームモード（'normal' / 'hard'）。タイトルで切替・localStorage保存
+let gameMode = localStorage.getItem('neko_mode') === 'hard' ? 'hard' : 'normal';
 
 // ── レスポンシブスケーリング ──────────────
 const info = document.getElementById('info');
@@ -313,7 +324,7 @@ let coyoteT, jumpBufferT;
 const COYOTE_FRAMES = 7;      // 屋根を踏み外した後もジャンプ可な猶予
 const JUMP_BUFFER_FRAMES = 9; // 着地前のジャンプ入力を先行受付する猶予
 // ── ゴール（保護猫カフェ到着）──
-let goalState, goalCafe, goalFlowers = [], goalFwTimer = 0, goalRunRoof = null; // 0:未到達 1:接近中 2:入店 3:花火 4:クリア画面
+let goalState, goalCafe, goalFlowers = [], goalFwTimer = 0, goalRunRoof = null, goalFlowerStartX = 0; // 0:未到達 1:接近中 2:入店 3:花火 4:クリア画面
 let fishCount = 0; // 取ったお魚の数
 const GOAL_ENABLED = true;
 const GOAL_DIST = 2500;       // ゴール距離
@@ -467,15 +478,19 @@ function update(dt) {
           goalState = 3;            // 入店完了→花火タイム
           recordScore();
           seGoal();                 // 盛大なファンファーレ
+          launchGoalFireworks();    // 初回の打ち上げ（ノーマル=large15発／ハード=goal）
           goalFwTimer = 0;
         }
       }
     } else if (goalState === 3) {
-      // タップするまで花火を上げ続ける
-      goalFwTimer -= dt;
-      if (goalFwTimer <= 0) {
-        spawnBurst('goal');
-        goalFwTimer = 14 + Math.random() * 16;
+      // ハードのみタップまで派手に上げ続ける（ノーマルは初回15発で打ち止め）
+      if (gameMode === 'hard') {
+        goalFwTimer -= dt;
+        if (goalFwTimer <= 0) {
+          spawnBurst('goal');
+          if (Math.random() < 0.7) spawnBurst('goal'); // 時々2連でさらに派手に
+          goalFwTimer = 9 + Math.random() * 10;        // 速めの連発
+        }
       }
     }
     return;
@@ -484,25 +499,33 @@ function update(dt) {
   // ゴール接近トリガー：到達したら長い平らな道を敷いてカフェ＆両側花道を配置
   if (GOAL_ENABLED && goalState === 0 && score >= GOAL_DIST) {
     goalState = 1;
-    const last = roofs[roofs.length - 1];
-    const runW = 1400;
-    const runRoof = mkRoof(last.x + last.w + 40, last.y, runW);
+    // 猫が今乗っている屋根を基準に、そこから先を落とし穴なしの平らな一本道にする
+    const baseRoof = roofs.find(r => r.x <= cat.x + 8 && r.x + r.w >= cat.x + 8)
+                  || roofs.find(r => r.x > cat.x) || roofs[roofs.length - 1];
+    const gy = baseRoof.y;
+    roofs = roofs.filter(r => r.x + r.w <= baseRoof.x + baseRoof.w + 1);
+    const runW = 1800;
+    const runRoof = mkRoof(baseRoof.x + baseRoof.w, gy, runW);
     roofs.push(runRoof);
     goalRunRoof = runRoof;
-    goalCafe = { x: runRoof.x + 380, y: last.y }; // 道の途中にカフェ
-    // お花で道を飾る（カフェの足元を避けて道全体に・両側）
+    // 余韻：まず平坦な道を約100m走ってから花道が出てくる
+    const plainLen = 520;
+    goalFlowerStartX = cat.x + plainLen;
+    goalCafe = { x: goalFlowerStartX + 320, y: gy };
     goalFlowers = [];
-    for (let fx = runRoof.x + 20; fx < runRoof.x + runW - 20; fx += 26) {
-      if (fx > goalCafe.x - 8 && fx < goalCafe.x + 80) continue; // カフェ足元は飛ばす
+    const flowerStep = gameMode === 'hard' ? 26 : 52;
+    for (let fx = Math.round(goalFlowerStartX); fx < runRoof.x + runW - 20; fx += flowerStep) {
+      if (fx > goalCafe.x - 8 && fx < goalCafe.x + 80) continue;
       const col = ['#FF77A8','#FFEC27','#FFF1E8','#FF9AD5'][(Math.random()*4)|0];
       goalFlowers.push({ x: fx, y: runRoof.y, col, sway: Math.random()*Math.PI*2 });
     }
   }
 
-  // ゴール接近中：花道（runRoof）が画面に入ってから減速＝ゴールモード本番
+  // ゴール接近中：まず平坦な道を進み、花道が猫に届いたら減速
   if (goalState === 1 && goalCafe) {
-    if (goalRunRoof && goalRunRoof.x <= cat.x) speed = 1.2; // 花道に乗ったらゆっくり（落とし穴を抜けた後）
-    const targetX = Math.round(W / 2 - 36); // 画面中央にカフェ
+    if (goalFlowerStartX <= cat.x) speed = 1.2;
+    goalFlowerStartX -= speed * dt;
+    const targetX = Math.round(W / 2 - 36);
     goalCafe.x -= speed * dt;
     goalFlowers.forEach(f => f.x -= speed * dt);
     if (goalCafe.x <= targetX) {
@@ -524,7 +547,7 @@ function update(dt) {
   }
 
   // スコア・速度（ゴール接近中はスコア停止・速度は1.2固定）
-  if (goalState === 0) { score += dt * 0.4; speed = 2.2 + score * 0.002; }
+  if (goalState === 0) { score += dt * 0.4; speed = 2.2 + score * (gameMode === 'hard' ? 0.002 : 0.0015); }
 
   // 看板スクロール・削除
   billboards.forEach(b => b.x -= speed * dt);
@@ -562,13 +585,15 @@ function update(dt) {
     const last = roofs[roofs.length-1];
     // 難易度：スコアに応じて隙間の最大値を広げる（前半は優しく、徐々に2段ジャンプ必須に）
     // 0m: 30〜90px → 3000m以降: 30〜160px（線形に拡大）
-    const diff = Math.min(score / 3000, 1);        // 0→1（3000mで最大）
+    // 難易度ピーク：Hard=3000m / Normal=4000m（緩やか）
+    const peak = gameMode === 'hard' ? 3000 : 4000;
+    const diff = Math.min(score / peak, 1);        // 0→1（peakで最大）
     const gapMax = 60 + diff * 40;                 // 60 → 100
     const gap = 30 + (Math.random() * gapMax)|0;   // 30〜90 → 30〜130
     // 高低差は500m刻みの段階式：500mまで平坦、以降500mごとに一段ずつ広がる
-    // 500m→ステップ1 … 3000m(ステップ5)で最大±50px
-    const step = Math.max(0, Math.min(Math.floor((score - 500) / 500) + 1, 5)); // 0〜5
-    const hDiff = step * (100 / 5); // 0 → 100（±50px相当）
+    const maxStep = gameMode === 'hard' ? 5 : 7;   // Normalはより細かく＝緩やか
+    const step = Math.max(0, Math.min(Math.floor((score - 500) / 500) + 1, maxStep));
+    const hDiff = step * (100 / maxStep); // 0 → 100（±50px相当）
     const ny = Math.max(H*0.35, Math.min(H-80, last.y + ((Math.random()-0.5)*hDiff)|0));
     const nw = 120 + (Math.random()*100)|0;
     roofs.push(mkRoof(last.x + last.w + gap, ny, nw));
@@ -605,7 +630,7 @@ function update(dt) {
   bats = bats.filter(b => b.x > -30);
 
   // スコア1500以上でスポーン
-  if (score > 1500 && goalState === 0) {
+  if (score > 1500 && goalState === 0 && gameMode === 'hard') {
     batTimer -= dt;
     if (batTimer <= 0) {
       // 猫が走る高さ付近（屋根の少し上）でランダムな高さ
@@ -633,7 +658,7 @@ function update(dt) {
   mice = mice.filter(m => m.x + 14 > -10 && m.x < W + 20);
 
   // スコア1000以上でスポーン（出現率低め）
-  if (score > 1000 && goalState === 0) {
+  if (score > 1000 && goalState === 0 && gameMode === 'hard') {
     mouseTimer -= dt;
     if (mouseTimer <= 0) {
       // 画面外右側の屋根を探す
@@ -721,7 +746,7 @@ function update(dt) {
   }
 
   // 小→大の境目を越えた瞬間：拡大アクション
-  const nowBig = hunger >= BIG_THRESHOLD;
+  const nowBig = (hunger >= BIG_THRESHOLD || powerT > 0);
   if (nowBig && !catBig) {
     growT = GROW_DUR;
     seGrow();
@@ -833,7 +858,7 @@ function update(dt) {
 // 敵接触の処理：耐えられたらtrue（ダメージ無効）、falseならゲームオーバーへ
 function damageOrSurvive() {
   if (invulnT > 0) return true;          // 被弾直後の無敵
-  if (hunger >= BIG_THRESHOLD) {         // 大きいねこ＝1回耐える→ゲージ0＋縮小
+  if ((hunger >= BIG_THRESHOLD || powerT > 0)) {         // 大きいねこ＝1回耐える→ゲージ0＋縮小
     hunger = 0;
     powerT = 0;
     invulnT = 60;
@@ -865,6 +890,12 @@ function die() {
   spawnParticles(cat.x + 8, cat.y + 8);
   stopBGM();
   seGameOver();
+}
+
+function toggleMode() {
+  gameMode = (gameMode === 'hard') ? 'normal' : 'hard';
+  localStorage.setItem('neko_mode', gameMode);
+  seCountdown(); // 切替フィードバック音
 }
 
 function toggleFullscreen() {
@@ -1364,9 +1395,13 @@ function scheduleBGM(gen) {
 }
 
 // ── 入力 ────────────────────────────────
-document.addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); } });
+document.addEventListener('keydown', e => {
+  // タイトルで左右キーはモード切替
+  if (state === 'title' && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')) { e.preventDefault(); toggleMode(); return; }
+  if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); }
+});
 document.addEventListener('pointerdown', e => {
-  if (e.target.tagName === 'BUTTON' || e.target.id === 'ui-panel-hint2') return;
+  if (e.target.tagName === 'BUTTON' || e.target.id === 'ui-panel-hint2' || e.target.id === 'ui-panel-mode') return;
   e.preventDefault();
   jump();
 });
@@ -1505,13 +1540,13 @@ function launchFirework(size) {
 
 // ゴールの盛大な花火（large より多く・大きく・連続）
 function launchGoalFireworks() {
-  launchFirework('goal');
+  launchFirework(gameMode === 'hard' ? 'goal' : 'large');
 }
 
 function spawnBurst(size) {
-  const nums  = { small: 16, medium: 24, large: 36, goal: 52 };
-  const radii = { small: 18, medium: 30, large: 48, goal: 66 };
-  const lives = { small: 40, medium: 55, large: 75, goal: 95 };
+  const nums  = { small: 16, medium: 24, large: 36, goal: 64 };
+  const radii = { small: 18, medium: 30, large: 48, goal: 78 };
+  const lives = { small: 40, medium: 55, large: 75, goal: 100 };
 
   const cx = 30 + Math.random() * (W - 60);
   const cy = 14 + Math.random() * (H * 0.42);
@@ -2055,7 +2090,7 @@ function drawCat() {
   const blink = (cat.blinkT % 120) < 8;
 
   // ── 体のサイズ（小=0.5／大=1.0）＋拡大ポップ＋被弾無敵の点滅 ──
-  let bodyScale = (hunger >= BIG_THRESHOLD) ? 1.0 : 0.5;
+  let bodyScale = ((hunger >= BIG_THRESHOLD || powerT > 0)) ? 1.0 : 0.5;
   if (growT > 0) {
     const p = 1 - growT / GROW_DUR; // 0→1
     bodyScale = p < 0.7 ? (0.5 + (1.15 - 0.5) * (p / 0.7))
@@ -2666,7 +2701,7 @@ function drawHungerGauge() {
   ctx.fillStyle = '#222233';
   ctx.fillRect(bx, by, barW, barH);
   // 中身（3段ジャンプ中は残り時間ゲージ＝金、通常は体力ゲージ）
-  const big = hunger >= BIG_THRESHOLD;
+  const big = (hunger >= BIG_THRESHOLD || powerT > 0);
   const ratio = full ? (powerT / POWER_DUR) : (hunger / HUNGER_MAX);
   const w = ratio * barW;
   ctx.fillStyle = full ? '#FFEC27' : (big ? '#00E436' : '#FF9933');
@@ -2696,6 +2731,14 @@ function drawUI() {
   // スコア・ベスト（HTML）
   uiScoreVal.textContent = `SCORE: ${(score|0).toString().padStart(4,'0')}m`;
   uiBestVal.textContent  = `BEST : ${(bestScore|0).toString().padStart(4,'0')}m`;
+  // モード表示（プレイ中・カウントダウン中・ヒット中）
+  const modeHud = document.getElementById('ui-mode-val');
+  if ((state === 'play' || state === 'countdown' || state === 'hit') && goalState === 0) {
+    modeHud.textContent = gameMode === 'hard' ? 'HARD' : 'NORMAL';
+    modeHud.style.color = gameMode === 'hard' ? '#ff5555' : '#55cc66';
+  } else {
+    modeHud.textContent = '';
+  }
 
   // パネル（タイトル / ゲームオーバー）
   if (state === 'title') {
@@ -2705,16 +2748,22 @@ function drawUI() {
     uiPanelSub.textContent  = '屋根の上を駆け抜けろ！';
     uiPanelSub2.textContent = '';
     document.getElementById('ui-ranking').style.display = 'none';
+    // モード切替表示
+    const modeEl = document.getElementById('ui-panel-mode');
+    modeEl.style.display = 'block';
+    modeEl.style.color = gameMode === 'hard' ? '#ff5555' : '#55cc66';
+    modeEl.textContent = `◀  ${gameMode === 'hard' ? 'HARD' : 'NORMAL'}  ▶`;
     document.getElementById('ui-panel-controls').textContent = 'SPACE / TAP でジャンプ!';
-    uiPanelHint.textContent = '[ SPACE / TAP ] でスタート';
+    uiPanelHint.textContent = 'スタート';
     uiPanelHint.className   = 'blink hint';
     document.getElementById('ui-panel-hint2').textContent = '';
   } else if (state === 'dead' && cat.deadTimer > 30) {
+    document.getElementById('ui-panel-mode').style.display = 'none';
     uiPanel.style.display = 'block';
     uiPanelTitle.style.color = '#ff4444';
     uiPanelTitle.textContent = 'GAME OVER';
     uiPanelSub.className  = 'gameover-score';
-    uiPanelSub.textContent = `SCORE: ${(score|0)}m`;
+    uiPanelSub.textContent = `SCORE: ${(score|0)}m[${gameMode === 'hard' ? 'H' : 'N'}]`;
     uiPanelSub2.textContent = ((score|0) >= bestScore && score > 0) ? '★ NEW RECORD! ★' : '';
     uiPanelSub2.style.color = '#ff88ff';
     // ベスト3表示
@@ -2732,11 +2781,12 @@ function drawUI() {
     document.getElementById('ui-panel-controls').textContent = '';
   } else if (goalState === 4) {
     uiPanel.style.display = 'block';
+    document.getElementById('ui-panel-mode').style.display = 'none';
     uiPanelTitle.style.color = '#FFEC27';
     uiPanelTitle.textContent = 'おかえり!!';
     uiPanelSub.className  = 'gameover-score';
     uiPanelSub.textContent = '拝啓ねこ様に到着！';
-    uiPanelSub2.textContent = `SCORE: ${(score|0)}m  /  FISH: ${fishCount}`;
+    uiPanelSub2.textContent = `SCORE: ${(score|0)}m[${gameMode === 'hard' ? 'H' : 'N'}]  /  FISH: ${fishCount}`;
     uiPanelSub2.style.color = '#aaffaa';
     document.getElementById('ui-ranking').style.display = 'none';
     uiPanelHint.textContent = '[ SPACE / TAP ] でもう一度';
